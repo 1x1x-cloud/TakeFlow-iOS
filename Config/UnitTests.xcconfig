@@ -1,0 +1,7 @@
+#include "Shared.xcconfig"
+
+PRODUCT_BUNDLE_IDENTIFIER = com.example.takeflow.placeholder.tests
+PRODUCT_NAME = TakeFlowTests
+PRODUCT_MODULE_NAME = TakeFlowTests
+BUNDLE_LOADER = $(TEST_HOST)
+TEST_HOST = $(BUILT_PRODUCTS_DIR)/TakeFlow.app/TakeFlow

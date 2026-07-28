@@ -1,0 +1,51 @@
+.DS_Store
+
+# Xcode build products and test results
+.build/
+build/
+DerivedData/
+*.xcresult
+*.xcarchive
+*.ipa
+*.dSYM
+*.dSYM.zip
+*.xcactivitylog
+
+# Xcode user and workspace state
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+*.xcuserdata
+xcuserdata/
+*.moved-aside
+.swiftpm/xcode/package.xcworkspace/xcuserdata/
+
+# Playgrounds and editor temporary files
+*.playground/timeline.xctimeline
+*.playground/playground.xcworkspace
+*.tmp
+*.temp
+*.swp
+*.swo
+*.orig
+*~
+
+# Local signing, secrets, and machine-specific configuration
+*.p12
+*.p8
+*.cer
+*.key
+*.pem
+*.mobileprovision
+*.provisionprofile
+Secrets.xcconfig
+.env
+.env.*
+!.env.example
+
+# Generated media and local verification artifacts
+Artifacts/
+TestArtifacts/
+Recordings/
+Exports/
+Screenshots/

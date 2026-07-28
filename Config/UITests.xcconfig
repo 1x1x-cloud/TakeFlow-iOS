@@ -1,0 +1,6 @@
+#include "Shared.xcconfig"
+
+PRODUCT_BUNDLE_IDENTIFIER = com.example.takeflow.placeholder.uitests
+PRODUCT_NAME = TakeFlowUITests
+PRODUCT_MODULE_NAME = TakeFlowUITests
+TEST_TARGET_NAME = TakeFlow

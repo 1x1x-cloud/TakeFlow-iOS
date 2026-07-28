@@ -1,0 +1,13 @@
+#include "Shared.xcconfig"
+
+// Placeholder only. Replace after the Apple Developer team and production identifier are approved.
+PRODUCT_BUNDLE_IDENTIFIER = com.example.takeflow.placeholder
+PRODUCT_NAME = TakeFlow
+PRODUCT_MODULE_NAME = TakeFlow
+
+INFOPLIST_KEY_CFBundleDisplayName = 一遍成
+INFOPLIST_KEY_LSApplicationCategoryType = public.app-category.photo-video
+INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES
+INFOPLIST_KEY_UILaunchScreen_Generation = YES
+INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
