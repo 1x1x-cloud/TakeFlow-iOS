@@ -22,6 +22,26 @@
 		C0000000000000000000000D /* DomainModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000D /* DomainModelTests.swift */; };
 		C0000000000000000000000E /* PersistenceContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000E /* PersistenceContractTests.swift */; };
 		C0000000000000000000000F /* TakeFlowUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000F /* TakeFlowUITests.swift */; };
+		C00000000000000000000030 /* ScriptSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000030 /* ScriptSchema.swift */; };
+		C00000000000000000000031 /* ScriptModelContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000031 /* ScriptModelContainer.swift */; };
+		C00000000000000000000032 /* SwiftDataScriptRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000032 /* SwiftDataScriptRepository.swift */; };
+		C00000000000000000000033 /* ScriptMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000033 /* ScriptMetrics.swift */; };
+		C00000000000000000000034 /* ScriptLibraryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000034 /* ScriptLibraryService.swift */; };
+		C00000000000000000000035 /* ScriptEditorStrings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000035 /* ScriptEditorStrings.swift */; };
+		C00000000000000000000036 /* ScriptEditorViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000036 /* ScriptEditorViewModel.swift */; };
+		C00000000000000000000037 /* ScriptLibraryViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000037 /* ScriptLibraryViewModel.swift */; };
+		C00000000000000000000038 /* ScriptLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000038 /* ScriptLibraryView.swift */; };
+		C00000000000000000000039 /* ScriptEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000039 /* ScriptEditorView.swift */; };
+		C00000000000000000000040 /* TestScriptRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000040 /* TestScriptRepository.swift */; };
+		C00000000000000000000041 /* SwiftDataScriptRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000041 /* SwiftDataScriptRepositoryTests.swift */; };
+		C00000000000000000000042 /* ScriptLibraryServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000042 /* ScriptLibraryServiceTests.swift */; };
+		C00000000000000000000043 /* ScriptEditorViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000043 /* ScriptEditorViewModelTests.swift */; };
+		C00000000000000000000044 /* ScriptPerformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000044 /* ScriptPerformanceTests.swift */; };
+		C00000000000000000000045 /* ScriptRecoveryDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000045 /* ScriptRecoveryDraft.swift */; };
+		C00000000000000000000046 /* ScriptRecoveryDraftStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000046 /* ScriptRecoveryDraftStore.swift */; };
+		C00000000000000000000047 /* FileScriptRecoveryDraftStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000047 /* FileScriptRecoveryDraftStore.swift */; };
+		C00000000000000000000048 /* TestScriptRecoveryDraftStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000048 /* TestScriptRecoveryDraftStore.swift */; };
+		C00000000000000000000049 /* ScriptRecoveryDraftTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000049 /* ScriptRecoveryDraftTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -73,6 +93,27 @@
 		B00000000000000000000026 /* VideoExport README */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; name = README.md; path = README.md; sourceTree = "<group>"; };
 		B00000000000000000000027 /* Subscription README */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; name = README.md; path = README.md; sourceTree = "<group>"; };
 		B00000000000000000000028 /* Settings README */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; name = README.md; path = README.md; sourceTree = "<group>"; };
+		B00000000000000000000030 /* ScriptSchema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptSchema.swift; sourceTree = "<group>"; };
+		B00000000000000000000031 /* ScriptModelContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptModelContainer.swift; sourceTree = "<group>"; };
+		B00000000000000000000032 /* SwiftDataScriptRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftDataScriptRepository.swift; sourceTree = "<group>"; };
+		B00000000000000000000033 /* ScriptMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptMetrics.swift; sourceTree = "<group>"; };
+		B00000000000000000000034 /* ScriptLibraryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptLibraryService.swift; sourceTree = "<group>"; };
+		B00000000000000000000035 /* ScriptEditorStrings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptEditorStrings.swift; sourceTree = "<group>"; };
+		B00000000000000000000036 /* ScriptEditorViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptEditorViewModel.swift; sourceTree = "<group>"; };
+		B00000000000000000000037 /* ScriptLibraryViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptLibraryViewModel.swift; sourceTree = "<group>"; };
+		B00000000000000000000038 /* ScriptLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptLibraryView.swift; sourceTree = "<group>"; };
+		B00000000000000000000039 /* ScriptEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptEditorView.swift; sourceTree = "<group>"; };
+		B0000000000000000000003A /* Persistence README */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; name = README.md; path = README.md; sourceTree = "<group>"; };
+		B00000000000000000000040 /* TestScriptRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestScriptRepository.swift; sourceTree = "<group>"; };
+		B00000000000000000000041 /* SwiftDataScriptRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftDataScriptRepositoryTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000042 /* ScriptLibraryServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptLibraryServiceTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000043 /* ScriptEditorViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptEditorViewModelTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000044 /* ScriptPerformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptPerformanceTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000045 /* ScriptRecoveryDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptRecoveryDraft.swift; sourceTree = "<group>"; };
+		B00000000000000000000046 /* ScriptRecoveryDraftStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptRecoveryDraftStore.swift; sourceTree = "<group>"; };
+		B00000000000000000000047 /* FileScriptRecoveryDraftStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileScriptRecoveryDraftStore.swift; sourceTree = "<group>"; };
+		B00000000000000000000048 /* TestScriptRecoveryDraftStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestScriptRecoveryDraftStore.swift; sourceTree = "<group>"; };
+		B00000000000000000000049 /* ScriptRecoveryDraftTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptRecoveryDraftTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -168,6 +209,13 @@
 			children = (
 				B00000000000000000000007 /* ScriptRepository.swift */,
 				B00000000000000000000008 /* ProjectFileManaging.swift */,
+				B00000000000000000000030 /* ScriptSchema.swift */,
+				B00000000000000000000031 /* ScriptModelContainer.swift */,
+				B00000000000000000000032 /* SwiftDataScriptRepository.swift */,
+				B00000000000000000000045 /* ScriptRecoveryDraft.swift */,
+				B00000000000000000000046 /* ScriptRecoveryDraftStore.swift */,
+				B00000000000000000000047 /* FileScriptRecoveryDraftStore.swift */,
+				B0000000000000000000003A /* Persistence README */,
 			);
 			path = Persistence;
 			sourceTree = "<group>";
@@ -208,6 +256,13 @@
 			isa = PBXGroup;
 			children = (
 				B00000000000000000000020 /* ScriptEditor README */,
+				B00000000000000000000033 /* ScriptMetrics.swift */,
+				B00000000000000000000034 /* ScriptLibraryService.swift */,
+				B00000000000000000000035 /* ScriptEditorStrings.swift */,
+				B00000000000000000000036 /* ScriptEditorViewModel.swift */,
+				B00000000000000000000037 /* ScriptLibraryViewModel.swift */,
+				B00000000000000000000038 /* ScriptLibraryView.swift */,
+				B00000000000000000000039 /* ScriptEditorView.swift */,
 			);
 			path = ScriptEditor;
 			sourceTree = "<group>";
@@ -281,6 +336,13 @@
 			children = (
 				B0000000000000000000000D /* DomainModelTests.swift */,
 				B0000000000000000000000E /* PersistenceContractTests.swift */,
+				B00000000000000000000040 /* TestScriptRepository.swift */,
+				B00000000000000000000041 /* SwiftDataScriptRepositoryTests.swift */,
+				B00000000000000000000042 /* ScriptLibraryServiceTests.swift */,
+				B00000000000000000000043 /* ScriptEditorViewModelTests.swift */,
+				B00000000000000000000044 /* ScriptPerformanceTests.swift */,
+				B00000000000000000000048 /* TestScriptRecoveryDraftStore.swift */,
+				B00000000000000000000049 /* ScriptRecoveryDraftTests.swift */,
 			);
 			path = TakeFlowTests;
 			sourceTree = "<group>";
@@ -454,6 +516,19 @@
 				C0000000000000000000000A /* AppLogger.swift in Sources */,
 				C0000000000000000000000B /* AppError.swift in Sources */,
 				C0000000000000000000000C /* ServiceLifecycle.swift in Sources */,
+				C00000000000000000000030 /* ScriptSchema.swift in Sources */,
+				C00000000000000000000031 /* ScriptModelContainer.swift in Sources */,
+				C00000000000000000000032 /* SwiftDataScriptRepository.swift in Sources */,
+				C00000000000000000000033 /* ScriptMetrics.swift in Sources */,
+				C00000000000000000000034 /* ScriptLibraryService.swift in Sources */,
+				C00000000000000000000035 /* ScriptEditorStrings.swift in Sources */,
+				C00000000000000000000036 /* ScriptEditorViewModel.swift in Sources */,
+				C00000000000000000000037 /* ScriptLibraryViewModel.swift in Sources */,
+				C00000000000000000000038 /* ScriptLibraryView.swift in Sources */,
+				C00000000000000000000039 /* ScriptEditorView.swift in Sources */,
+				C00000000000000000000045 /* ScriptRecoveryDraft.swift in Sources */,
+				C00000000000000000000046 /* ScriptRecoveryDraftStore.swift in Sources */,
+				C00000000000000000000047 /* FileScriptRecoveryDraftStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -463,6 +538,13 @@
 			files = (
 				C0000000000000000000000D /* DomainModelTests.swift in Sources */,
 				C0000000000000000000000E /* PersistenceContractTests.swift in Sources */,
+				C00000000000000000000040 /* TestScriptRepository.swift in Sources */,
+				C00000000000000000000041 /* SwiftDataScriptRepositoryTests.swift in Sources */,
+				C00000000000000000000042 /* ScriptLibraryServiceTests.swift in Sources */,
+				C00000000000000000000043 /* ScriptEditorViewModelTests.swift in Sources */,
+				C00000000000000000000044 /* ScriptPerformanceTests.swift in Sources */,
+				C00000000000000000000048 /* TestScriptRecoveryDraftStore.swift in Sources */,
+				C00000000000000000000049 /* ScriptRecoveryDraftTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

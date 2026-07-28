@@ -20,29 +20,69 @@ final class PersistenceContractTests: XCTestCase {
 
         try await repository.save(retained)
         try await repository.save(deleted)
-        try await repository.delete(id: deleted.id)
+        try await repository.delete(id: deleted.id, at: .now)
 
         let scripts = try await repository.scripts()
         XCTAssertEqual(scripts, [retained])
     }
+
+    func testMockRepositoryCanRestoreSoftDeletedScript() async throws {
+        let repository: any ScriptRepository = MockScriptRepository()
+        let script = Script(title: "可撤销删除")
+
+        try await repository.save(script)
+        try await repository.delete(id: script.id, at: .now)
+        try await repository.restore(id: script.id)
+
+        let restored = try await repository.script(id: script.id)
+        XCTAssertEqual(restored, script)
+    }
 }
 
 private actor MockScriptRepository: ScriptRepository {
-    private var storage: [UUID: Script] = [:]
+    private struct Entry {
+        var script: Script
+        var deletedAt: Date?
+    }
+
+    private var storage: [UUID: Entry] = [:]
 
     func scripts() -> [Script] {
-        storage.values.sorted { $0.createdAt < $1.createdAt }
+        storage.values
+            .filter { $0.deletedAt == nil }
+            .map(\.script)
+            .sorted { $0.createdAt < $1.createdAt }
     }
 
     func script(id: UUID) -> Script? {
-        storage[id]
+        guard let entry = storage[id], entry.deletedAt == nil else {
+            return nil
+        }
+        return entry.script
     }
 
     func save(_ script: Script) {
-        storage[script.id] = script
+        storage[script.id] = Entry(script: script, deletedAt: nil)
     }
 
-    func delete(id: UUID) {
+    func delete(id: UUID, at deletionDate: Date) {
+        storage[id]?.deletedAt = deletionDate
+    }
+
+    func restore(id: UUID) {
+        storage[id]?.deletedAt = nil
+    }
+
+    func permanentlyDelete(id: UUID) {
         storage[id] = nil
+    }
+
+    func purgeDeleted(before date: Date) {
+        storage = storage.filter { _, entry in
+            guard let deletedAt = entry.deletedAt else {
+                return true
+            }
+            return deletedAt > date
+        }
     }
 }

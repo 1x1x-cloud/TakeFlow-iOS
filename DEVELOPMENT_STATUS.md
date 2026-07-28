@@ -3,7 +3,7 @@
 最后更新：2026-07-28
 产品规格：`PRODUCT_SPEC.md` 1.0
 总体状态：进行中
-当前阶段：模块 0 已完成，模块 1 未开始
+当前阶段：模块 0 已完成；模块 1 的实现、模拟器构建和自动化验收已通过，真机验收待执行；模块 2 未开始
 
 ## 状态定义
 
@@ -17,7 +17,7 @@
 | 模块 | 名称 | 状态 | 构建 | 自动化测试 | 真机验证 | 备注 |
 |---|---|---|---|---|---|---|
 | 0 | 工程初始化与规则建立 | 已完成 | iPhone、iPad 模拟器构建通过 | 5 通过、0 失败 | 模拟器启动通过；正式签名、真机与 TestFlight 未验证 | `TakeFlow` App、单测、UI 测试三个 Target 已建立；发布前手动项见 M0-01 至 M0-06 |
-| 1 | 稿件管理与编辑 | 未开始 | 未运行 | 未运行 | 未执行 | — |
+| 1 | 稿件管理与编辑 | 进行中 | iPhone、iPad 模拟器 Debug 构建通过 | 单元测试 33/33；UI 测试 4/4 | M1-01 至 M1-07 待执行 | SwiftData 本地持久化、V1 Schema 与独立恢复草稿已落地；状态保留为“进行中”，直到真机强杀恢复、输入、性能、离线和低存储验收完成 |
 | 2 | 基础提词器 | 未开始 | 未运行 | 未运行 | 未执行 | — |
 | 3 | 摄像头与视频录制 | 未开始 | 未运行 | 未运行 | 未执行 | — |
 | 4 | 实时语音跟随 | 未开始 | 未运行 | 未运行 | 未执行 | 语音识别隐私路径需先确认 |
@@ -43,7 +43,24 @@
 - 编译器未报告 Swift 源码警告。Xcode 26 的 `appintentsmetadataprocessor` 对未链接 AppIntents 的 Target 输出一次系统工具提示：“Metadata extraction skipped. No AppIntents.framework dependency found.” 本项目未使用 AppIntents，不影响产物；该提示不来自项目源码。
 - 未配置正式开发团队、正式 Bundle ID、权限 entitlement 或真实密钥；当前 Bundle ID 为 `com.example.takeflow.placeholder`。
 - 正式签名、真实 iPhone/iPad 安装和 TestFlight 分发尚未验证，不能作为发布就绪证据。
-- 未引入第三方包、SDK 或业务功能；后续模块目录仅包含边界说明。
+- 未引入第三方包或 SDK；当前业务实现仅限模块 1，模块 2 至模块 9 的目录仍只保留边界说明。
+
+### 模块 1 验证事实
+
+- 基线：开始实现前 `HEAD` 为 `57e15631c1f772f9e9351ea2cc1d40d4f9b7b164`，分支 `master`；本轮未创建提交。
+- iPhone 构建：`xcodebuild -project TakeFlow.xcodeproj -scheme TakeFlow -configuration Debug -destination 'platform=iOS Simulator,id=4563833B-0C75-4B44-98B9-FE802962D730' -derivedDataPath .build/RecoveryDraftFinal-iPhone build`，iPhone 17 Pro / iOS 26.0.1，`BUILD SUCCEEDED`。
+- iPad 构建：`xcodebuild -project TakeFlow.xcodeproj -scheme TakeFlow -configuration Debug -destination 'platform=iOS Simulator,id=08CE106F-C7F5-4CFC-8051-F216CBFDC2F1' -derivedDataPath .build/RecoveryDraftFinal-iPad build`，iPad Pro 11-inch (M4) / iOS 26.0.1，`BUILD SUCCEEDED`。
+- 全量单元测试：`xcodebuild ... -derivedDataPath .build/RecoveryDraftFinal -only-testing:TakeFlowTests test`，33 项通过、0 失败、0 跳过；原模块 1 的 20 项全部继续通过，新增恢复草稿测试 13 项全部通过。结果包为 `.build/RecoveryDraftFinal/Logs/Test/Test-TakeFlow-2026.07.28_19-06-30-+0800.xcresult`。
+- 10 万字符自动化基线：在上述 iPhone 17 Pro 模拟器使用隔离 SwiftData 内存容器完成正式保存、读取、字符统计和正文搜索，测试耗时 0.308 秒；独立文件恢复草稿的原子写入与读取用例耗时 0.024 秒。两者均低于当前内部保护阈值 5 秒。该数据是本轮模拟器观测值，不是最大时延保证；规格尚未批准量化性能阈值，真实 iOS 17 设备上的编辑响应仍待 M1-02 验证。
+- 全量 UI 测试：`-only-testing:TakeFlowUITests`，4 项通过、0 失败；覆盖空稿件页启动、创建与编辑自动保存、复制/删除确认/短时撤销，以及使用磁盘 SwiftData Store 保存后终止并重启 App 的恢复。
+- 持久化采用本地 SwiftData Store，显式禁用 CloudKit；生产路径不使用内存演示数据。UI 测试只有需要隔离的用例通过启动参数选择内存 Store，重启恢复用例明确使用磁盘 Store。
+- 未完成编辑另写入 `Application Support/TakeFlow/RecoveryDrafts` 下按稳定 Script UUID 命名的独立 JSON 文件，不使用 UserDefaults 或 Caches。每份文件包含标题、正文、阅读位置、草稿时间、正式记录版本依据、编辑会话 ID 与单调 revision；写入在 actor 上串行执行，使用原子替换和文件保护，不在主线程执行大文本磁盘 I/O。
+- 编辑器先显示正式 SwiftData 记录，只在恢复草稿的基础版本与正式记录精确匹配且草稿更新时间较新时提出“恢复草稿”或“保留已保存版本”，不会静默覆盖。损坏、不可读或版本不匹配均保留正式记录并显示安全错误；正式保存成功后通过提交版本屏障清理恢复文件，晚到的旧写任务不能重新覆盖或复活草稿。
+- 删除稿件会同步阻止晚到草稿写入并清理恢复文件；清理失败时回滚软删除。撤销删除后重新允许该 Script ID 的恢复写入，既有复制、搜索和 5 秒撤销语义不变。
+- 恢复草稿不采用额外防抖：每次编辑状态变化都立即投递不可变快照，正式 SwiftData 保存仍保持 600 ms 防抖。因此恢复路径没有人为设置的 600 ms 等待窗口，但异步任务调度、文件系统负载和进程被立即杀死之间仍不存在可证明的固定最大时延。可保证的是“最近一次已完成原子替换的恢复快照”不会出现半写入；若在最新写入完成前强杀，最后若干输入仍可能缺失，不得表述为绝对零丢失。
+- 未添加网络客户端、云同步、第三方依赖、真实密钥或正式签名配置；模块 2 至模块 9 的业务功能未提前实现。
+- 编译器未报告 Swift 源码警告。Xcode 26 的未使用 AppIntents 元数据工具提示仍存在，性质与模块 0 相同。
+- 真机即时强制结束及两种恢复选择、中文输入法组合态、10 万字符真实编辑响应、飞行模式、低存储写入失败、iPad 外接键盘与辅助功能仍未验证，详见 M1-01 至 M1-07。
 
 ## 规格审查：待确认、遗漏与技术风险
 
@@ -75,6 +92,11 @@
 | 2026-07-28 | 内部工程名与 Scheme 使用 `TakeFlow`；App 显示名使用“一遍成” | 模块 0、9 与所有用户可见文案 | 产品负责人（用户） |
 | 2026-07-28 | Bundle ID 暂用 `com.example.takeflow.placeholder`，不设置正式开发团队 | 模块 0、8、9；真机安装和归档暂不可作为发布证据 | 产品负责人（用户） |
 | 2026-07-28 | 领域模型使用 Swift 6 `Sendable` 值类型；真实持久化适配器留到模块 1，模块 0 只建立异步协议并用测试 Mock 验证契约 | Core、模块 1 及后续依赖 | 模块 0 架构决策 |
+| 2026-07-28 | 模块 1 使用 `ScriptSchemaV1` 版本化 SwiftData Schema；稳定 UUID 为领域标识；生产 Store 仅本地、CloudKit 关闭；V1 发布后不回改，后续字段变更新增 Schema 版本并优先轻量迁移，语义转换使用显式 `MigrationStage` | Core/Persistence、ScriptEditor 与后续读取稿件的模块 | 模块 1 架构决策 |
+| 2026-07-28 | 编辑自动保存采用可注入时钟的 600 ms 防抖；进入后台或离开编辑页时立即冲刷；保存失败保留屏幕草稿并显示用户可理解错误，不把失败状态伪装为已保存 | ScriptEditor、生命周期恢复 | 模块 1 架构决策 |
+| 2026-07-28 | 在 600 ms 正式保存之外，每次编辑立即异步写入独立恢复快照；恢复文件位于 Application Support、采用原子替换与版本屏障；只有基础版本精确匹配且更新时才向用户提供恢复/保留选择，正式保存成功后清理 | Core/Persistence、ScriptEditor、崩溃恢复与后续迁移 | 模块 1 数据安全加固决策 |
+| 2026-07-28 | 删除采用 SwiftData 软删除标记与 5 秒撤销令牌；窗口内恢复，窗口结束后精确永久删除目标 UUID；复制生成新 UUID | ScriptEditor、后续项目引用规则 | 模块 1 架构决策 |
+| 2026-07-28 | 字数按去除空白后的扩展字素簇计数；预计时长默认 240 字符/分钟，可在 60–600 范围调整；最后阅读位置写入稿件记录并按正文长度夹紧 | ScriptEditor、Teleprompter 接口 | 模块 1 产品实现假设，待产品在后续模块确认默认语速 |
 
 ## 更新规则
 

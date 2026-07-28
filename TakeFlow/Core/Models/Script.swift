@@ -8,6 +8,7 @@ struct Script: Identifiable, Codable, Hashable, Sendable {
     let createdAt: Date
     var updatedAt: Date
     var estimatedDuration: TimeInterval
+    var speechRateCharactersPerMinute: Double
     var preferredFontSize: Double
     var preferredScrollSpeed: Double
     var lastReadPosition: Int
@@ -20,6 +21,7 @@ struct Script: Identifiable, Codable, Hashable, Sendable {
         createdAt: Date = .now,
         updatedAt: Date? = nil,
         estimatedDuration: TimeInterval = 0,
+        speechRateCharactersPerMinute: Double = 240,
         preferredFontSize: Double = 44,
         preferredScrollSpeed: Double = 1,
         lastReadPosition: Int = 0
@@ -31,6 +33,7 @@ struct Script: Identifiable, Codable, Hashable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt ?? createdAt
         self.estimatedDuration = estimatedDuration
+        self.speechRateCharactersPerMinute = speechRateCharactersPerMinute
         self.preferredFontSize = preferredFontSize
         self.preferredScrollSpeed = preferredScrollSpeed
         self.lastReadPosition = lastReadPosition

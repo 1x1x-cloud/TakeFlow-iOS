@@ -52,6 +52,7 @@
 - `Script`、`RecordingProject`、`RecordingSegment` 使用稳定 UUID；持久化关系和文件目录以 ID 关联，不以用户标题作为路径。
 - 每个录制项目使用独立目录。源片段、工作临时文件、导出中的文件和最终成片必须分区存放。
 - 写入元数据和关键小文件时采用原子替换；视频写入成功后再提交对应元数据状态，恢复流程必须能够发现孤立文件和缺失文件。
+- 大文本未完成编辑使用 Application Support 下的独立恢复文件，不得写入 UserDefaults 或 Caches。恢复文件必须原子替换、按稳定 ID 命名、带正式记录版本依据和单调 revision；正式保存后清理，恢复前必须让用户在草稿与已保存版本之间明确选择。
 - 新片段永不覆盖旧片段。导出成功并经用户确认前不得删除源片段。
 - 删除必须精确限制在目标项目目录，校验归属和标准化路径；不得使用宽泛递归删除。
 - 为低存储、写入失败、文件损坏、文件缺失和迁移失败提供可理解提示和恢复路径。
@@ -115,13 +116,13 @@ xcodebuild -project TakeFlow.xcodeproj \
   -only-testing:TakeFlowTests \
   test
 
-# UI 启动测试
+# 全部 UI 测试（含启动、自动保存、复制、删除确认与撤销）
 xcodebuild -project TakeFlow.xcodeproj \
   -scheme TakeFlow \
   -configuration Debug \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
   -derivedDataPath .build/DerivedData \
-  -only-testing:TakeFlowUITests/TakeFlowUITests/testLaunchShowsMinimalHome \
+  -only-testing:TakeFlowUITests \
   test
 
 # 发布前 Release 归档；仅在正式 Bundle ID 和开发团队获批后执行
