@@ -42,6 +42,21 @@
 		C00000000000000000000047 /* FileScriptRecoveryDraftStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000047 /* FileScriptRecoveryDraftStore.swift */; };
 		C00000000000000000000048 /* TestScriptRecoveryDraftStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000048 /* TestScriptRecoveryDraftStore.swift */; };
 		C00000000000000000000049 /* ScriptRecoveryDraftTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000049 /* ScriptRecoveryDraftTests.swift */; };
+		C00000000000000000000050 /* TeleprompterPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000050 /* TeleprompterPreferences.swift */; };
+		C00000000000000000000051 /* TeleprompterScriptProviding.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000051 /* TeleprompterScriptProviding.swift */; };
+		C00000000000000000000052 /* TeleprompterModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000052 /* TeleprompterModels.swift */; };
+		C00000000000000000000053 /* TeleprompterPlaybackMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000053 /* TeleprompterPlaybackMachine.swift */; };
+		C00000000000000000000054 /* TeleprompterStrings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000054 /* TeleprompterStrings.swift */; };
+		C00000000000000000000055 /* TeleprompterViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000055 /* TeleprompterViewModel.swift */; };
+		C00000000000000000000056 /* TeleprompterTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000056 /* TeleprompterTextView.swift */; };
+		C00000000000000000000057 /* TeleprompterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000057 /* TeleprompterView.swift */; };
+		C00000000000000000000058 /* TeleprompterPlaybackMachineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000058 /* TeleprompterPlaybackMachineTests.swift */; };
+		C00000000000000000000059 /* TeleprompterPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000059 /* TeleprompterPersistenceTests.swift */; };
+		C00000000000000000000060 /* TeleprompterViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000060 /* TeleprompterViewModelTests.swift */; };
+		C00000000000000000000061 /* ScriptReadingAnchor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000061 /* ScriptReadingAnchor.swift */; };
+		C00000000000000000000062 /* TeleprompterTextLayoutPerformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000062 /* TeleprompterTextLayoutPerformanceTests.swift */; };
+		C00000000000000000000063 /* TeleprompterDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000063 /* TeleprompterDocument.swift */; };
+		C00000000000000000000064 /* TeleprompterDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000064 /* TeleprompterDocumentTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -114,6 +129,21 @@
 		B00000000000000000000047 /* FileScriptRecoveryDraftStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileScriptRecoveryDraftStore.swift; sourceTree = "<group>"; };
 		B00000000000000000000048 /* TestScriptRecoveryDraftStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestScriptRecoveryDraftStore.swift; sourceTree = "<group>"; };
 		B00000000000000000000049 /* ScriptRecoveryDraftTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptRecoveryDraftTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000050 /* TeleprompterPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeleprompterPreferences.swift; sourceTree = "<group>"; };
+		B00000000000000000000051 /* TeleprompterScriptProviding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeleprompterScriptProviding.swift; sourceTree = "<group>"; };
+		B00000000000000000000052 /* TeleprompterModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeleprompterModels.swift; sourceTree = "<group>"; };
+		B00000000000000000000053 /* TeleprompterPlaybackMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeleprompterPlaybackMachine.swift; sourceTree = "<group>"; };
+		B00000000000000000000054 /* TeleprompterStrings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeleprompterStrings.swift; sourceTree = "<group>"; };
+		B00000000000000000000055 /* TeleprompterViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeleprompterViewModel.swift; sourceTree = "<group>"; };
+		B00000000000000000000056 /* TeleprompterTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeleprompterTextView.swift; sourceTree = "<group>"; };
+		B00000000000000000000057 /* TeleprompterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeleprompterView.swift; sourceTree = "<group>"; };
+		B00000000000000000000058 /* TeleprompterPlaybackMachineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeleprompterPlaybackMachineTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000059 /* TeleprompterPersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeleprompterPersistenceTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000060 /* TeleprompterViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeleprompterViewModelTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000061 /* ScriptReadingAnchor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptReadingAnchor.swift; sourceTree = "<group>"; };
+		B00000000000000000000062 /* TeleprompterTextLayoutPerformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeleprompterTextLayoutPerformanceTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000063 /* TeleprompterDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeleprompterDocument.swift; sourceTree = "<group>"; };
+		B00000000000000000000064 /* TeleprompterDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeleprompterDocumentTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -200,6 +230,8 @@
 				B00000000000000000000004 /* RecordingProject.swift */,
 				B00000000000000000000005 /* RecordingSegment.swift */,
 				B00000000000000000000006 /* UserPreferences.swift */,
+				B00000000000000000000050 /* TeleprompterPreferences.swift */,
+				B00000000000000000000061 /* ScriptReadingAnchor.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -215,6 +247,7 @@
 				B00000000000000000000045 /* ScriptRecoveryDraft.swift */,
 				B00000000000000000000046 /* ScriptRecoveryDraftStore.swift */,
 				B00000000000000000000047 /* FileScriptRecoveryDraftStore.swift */,
+				B00000000000000000000051 /* TeleprompterScriptProviding.swift */,
 				B0000000000000000000003A /* Persistence README */,
 			);
 			path = Persistence;
@@ -271,6 +304,13 @@
 			isa = PBXGroup;
 			children = (
 				B00000000000000000000021 /* Teleprompter README */,
+				B00000000000000000000052 /* TeleprompterModels.swift */,
+				B00000000000000000000053 /* TeleprompterPlaybackMachine.swift */,
+				B00000000000000000000054 /* TeleprompterStrings.swift */,
+				B00000000000000000000063 /* TeleprompterDocument.swift */,
+				B00000000000000000000055 /* TeleprompterViewModel.swift */,
+				B00000000000000000000056 /* TeleprompterTextView.swift */,
+				B00000000000000000000057 /* TeleprompterView.swift */,
 			);
 			path = Teleprompter;
 			sourceTree = "<group>";
@@ -343,6 +383,11 @@
 				B00000000000000000000044 /* ScriptPerformanceTests.swift */,
 				B00000000000000000000048 /* TestScriptRecoveryDraftStore.swift */,
 				B00000000000000000000049 /* ScriptRecoveryDraftTests.swift */,
+				B00000000000000000000058 /* TeleprompterPlaybackMachineTests.swift */,
+				B00000000000000000000059 /* TeleprompterPersistenceTests.swift */,
+				B00000000000000000000060 /* TeleprompterViewModelTests.swift */,
+				B00000000000000000000062 /* TeleprompterTextLayoutPerformanceTests.swift */,
+				B00000000000000000000064 /* TeleprompterDocumentTests.swift */,
 			);
 			path = TakeFlowTests;
 			sourceTree = "<group>";
@@ -529,6 +574,16 @@
 				C00000000000000000000045 /* ScriptRecoveryDraft.swift in Sources */,
 				C00000000000000000000046 /* ScriptRecoveryDraftStore.swift in Sources */,
 				C00000000000000000000047 /* FileScriptRecoveryDraftStore.swift in Sources */,
+				C00000000000000000000050 /* TeleprompterPreferences.swift in Sources */,
+				C00000000000000000000051 /* TeleprompterScriptProviding.swift in Sources */,
+				C00000000000000000000052 /* TeleprompterModels.swift in Sources */,
+				C00000000000000000000053 /* TeleprompterPlaybackMachine.swift in Sources */,
+				C00000000000000000000054 /* TeleprompterStrings.swift in Sources */,
+				C00000000000000000000063 /* TeleprompterDocument.swift in Sources */,
+				C00000000000000000000055 /* TeleprompterViewModel.swift in Sources */,
+				C00000000000000000000056 /* TeleprompterTextView.swift in Sources */,
+				C00000000000000000000057 /* TeleprompterView.swift in Sources */,
+				C00000000000000000000061 /* ScriptReadingAnchor.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -545,6 +600,11 @@
 				C00000000000000000000044 /* ScriptPerformanceTests.swift in Sources */,
 				C00000000000000000000048 /* TestScriptRecoveryDraftStore.swift in Sources */,
 				C00000000000000000000049 /* ScriptRecoveryDraftTests.swift in Sources */,
+				C00000000000000000000058 /* TeleprompterPlaybackMachineTests.swift in Sources */,
+				C00000000000000000000059 /* TeleprompterPersistenceTests.swift in Sources */,
+				C00000000000000000000060 /* TeleprompterViewModelTests.swift in Sources */,
+				C00000000000000000000062 /* TeleprompterTextLayoutPerformanceTests.swift in Sources */,
+				C00000000000000000000064 /* TeleprompterDocumentTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -3,7 +3,7 @@
 最后更新：2026-07-28
 产品规格：`PRODUCT_SPEC.md` 1.0
 总体状态：进行中
-当前阶段：模块 0 已完成；模块 1 的实现、模拟器构建和自动化验收已通过，真机验收待执行；模块 2 未开始
+当前阶段：模块 0 已完成；模块 1、模块 2 的实现、模拟器构建和自动化验收已通过，真机验收待执行；模块 2 的 10 万字符模拟器性能阻断已通过分块虚拟化解决，真实设备性能仍待验证
 
 ## 状态定义
 
@@ -18,7 +18,7 @@
 |---|---|---|---|---|---|---|
 | 0 | 工程初始化与规则建立 | 已完成 | iPhone、iPad 模拟器构建通过 | 5 通过、0 失败 | 模拟器启动通过；正式签名、真机与 TestFlight 未验证 | `TakeFlow` App、单测、UI 测试三个 Target 已建立；发布前手动项见 M0-01 至 M0-06 |
 | 1 | 稿件管理与编辑 | 进行中 | iPhone、iPad 模拟器 Debug 构建通过 | 单元测试 33/33；UI 测试 4/4 | M1-01 至 M1-07 待执行 | SwiftData 本地持久化、V1 Schema 与独立恢复草稿已落地；状态保留为“进行中”，直到真机强杀恢复、输入、性能、离线和低存储验收完成 |
-| 2 | 基础提词器 | 未开始 | 未运行 | 未运行 | 未执行 | — |
+| 2 | 基础提词器 | 进行中 | iPhone、iPad 模拟器 Debug 构建通过 | 单元测试 74/74；UI 测试 9/9（含模块 1 全量回归） | M2-01 至 M2-10 待执行 | 固定速度、唯一状态机、全局 Character 锚点、每稿偏好及有界分块虚拟化已实现；模拟器 1 万/10 万字符内部阈值通过，真机滚动、辅助功能及长稿性能未验收 |
 | 3 | 摄像头与视频录制 | 未开始 | 未运行 | 未运行 | 未执行 | — |
 | 4 | 实时语音跟随 | 未开始 | 未运行 | 未运行 | 未执行 | 语音识别隐私路径需先确认 |
 | 5 | 分段录制与错句重拍 | 未开始 | 未运行 | 未运行 | 未执行 | — |
@@ -43,11 +43,11 @@
 - 编译器未报告 Swift 源码警告。Xcode 26 的 `appintentsmetadataprocessor` 对未链接 AppIntents 的 Target 输出一次系统工具提示：“Metadata extraction skipped. No AppIntents.framework dependency found.” 本项目未使用 AppIntents，不影响产物；该提示不来自项目源码。
 - 未配置正式开发团队、正式 Bundle ID、权限 entitlement 或真实密钥；当前 Bundle ID 为 `com.example.takeflow.placeholder`。
 - 正式签名、真实 iPhone/iPad 安装和 TestFlight 分发尚未验证，不能作为发布就绪证据。
-- 未引入第三方包或 SDK；当前业务实现仅限模块 1，模块 2 至模块 9 的目录仍只保留边界说明。
+- 未引入第三方包或 SDK；当前业务实现仅限模块 1 和模块 2，模块 3 至模块 9 的目录仍只保留边界说明。
 
 ### 模块 1 验证事实
 
-- 基线：开始实现前 `HEAD` 为 `57e15631c1f772f9e9351ea2cc1d40d4f9b7b164`，分支 `master`；本轮未创建提交。
+- 基线：开始实现前 `HEAD` 为 `57e15631c1f772f9e9351ea2cc1d40d4f9b7b164`，分支 `master`；模块 1 已单独提交为 `a9c13d3b3b23554f1b0578116127d3f6eebd24ff`（`feat: implement resilient script management`）。
 - iPhone 构建：`xcodebuild -project TakeFlow.xcodeproj -scheme TakeFlow -configuration Debug -destination 'platform=iOS Simulator,id=4563833B-0C75-4B44-98B9-FE802962D730' -derivedDataPath .build/RecoveryDraftFinal-iPhone build`，iPhone 17 Pro / iOS 26.0.1，`BUILD SUCCEEDED`。
 - iPad 构建：`xcodebuild -project TakeFlow.xcodeproj -scheme TakeFlow -configuration Debug -destination 'platform=iOS Simulator,id=08CE106F-C7F5-4CFC-8051-F216CBFDC2F1' -derivedDataPath .build/RecoveryDraftFinal-iPad build`，iPad Pro 11-inch (M4) / iOS 26.0.1，`BUILD SUCCEEDED`。
 - 全量单元测试：`xcodebuild ... -derivedDataPath .build/RecoveryDraftFinal -only-testing:TakeFlowTests test`，33 项通过、0 失败、0 跳过；原模块 1 的 20 项全部继续通过，新增恢复草稿测试 13 项全部通过。结果包为 `.build/RecoveryDraftFinal/Logs/Test/Test-TakeFlow-2026.07.28_19-06-30-+0800.xcresult`。
@@ -62,6 +62,25 @@
 - 编译器未报告 Swift 源码警告。Xcode 26 的未使用 AppIntents 元数据工具提示仍存在，性质与模块 0 相同。
 - 真机即时强制结束及两种恢复选择、中文输入法组合态、10 万字符真实编辑响应、飞行模式、低存储写入失败、iPad 外接键盘与辅助功能仍未验证，详见 M1-01 至 M1-07。
 
+### 模块 2 验证事实
+
+- 基线：开始实现前 `HEAD` 为模块 1 本地基线 `a9c13d3b3b23554f1b0578116127d3f6eebd24ff`（`feat: implement resilient script management`），分支 `master`；工作区开始时干净，模块 1 与模块 2 的本地基线保持独立。
+- 数据迁移：当前 SwiftData Schema 为 `ScriptSchemaV2`，从 V1 使用轻量迁移；新增字号、行距、点/秒速度、左右边距、区域宽度/垂直位置、深浅模式、水平/垂直镜像和倒计时字段。自动化已用真实 V1 磁盘 Store 打开 V2 容器并验证旧稿、旧阅读位置和安全默认值可读。
+- 状态与时间：`TeleprompterPlaybackMachine` 明确区分 `idle`、`countingDown`、`running`、`paused`、`userDragging`、`finished` 和类型化 `error`；位置由单调时钟的运行段起点、实际经过秒数和逻辑点/秒推导，不按帧累加。60Hz 与 120Hz 模拟 10 秒均得到 600 点，误差在测试精度 `0.000001` 点内；后台时间不累计，返回时保持暂停。
+- 阅读位置：`ScriptReadingAnchor` 使用 Swift 扩展字素簇偏移，UIKit 桥接仅把它换算为当前布局像素；字号、行距、边距、区域宽度、方向和尺寸变化后重新解析锚点。拖动中只在当前块内计算轻量近似锚点，拖动结束时用当前可见 TextKit 单元解析精确全局位置；全文 Character 数与可读性已在后台索引中预计算，滚动帧不再重复扫描正文。
+- 分块呈现：`TeleprompterDocument` 在后台按段落优先、Swift Character 安全边界建立内容版本与双向索引；块目标 1,500 Character、硬上限 2,200。`UICollectionView` 只实例化可见 TextKit 单元，预取前 1、后 2 块；富文本 LRU 上限为 8，内存警告时释放非可见缓存。正文版本变化会丢弃旧索引；状态机、全局锚点及 SwiftData 事实来源保持唯一。
+- 数据安全：提词器通过 `TeleprompterScriptProviding` 重新读取最新正式稿后只写阅读位置和显示偏好，不持有陈旧正文快照；若存在比正式记录新的恢复草稿，阻止进入或保存提词状态并要求先在编辑器选择版本。单元测试证明保存提词状态不改正文，模块 1 的恢复、删除撤销、复制、搜索和 600 ms 自动保存测试全部继续通过。
+- iPhone 提交前复验：`xcodebuild -project TakeFlow.xcodeproj -scheme TakeFlow -configuration Debug -destination 'platform=iOS Simulator,id=4563833B-0C75-4B44-98B9-FE802962D730' -derivedDataPath .build/Module2Baseline-iPhone build -quiet`，iPhone 17 Pro / iOS 26.0.1，退出码 0。
+- iPad 提交前复验：`xcodebuild -project TakeFlow.xcodeproj -scheme TakeFlow -configuration Debug -destination 'platform=iOS Simulator,id=08CE106F-C7F5-4CFC-8051-F216CBFDC2F1' -derivedDataPath .build/Module2Baseline-iPad build -quiet`，iPad Pro 11-inch (M4) / iOS 26.0.1，退出码 0。
+- 提交前全量单元测试：`xcodebuild ... -derivedDataPath .build/Module2BaselineVerification -only-testing:TakeFlowTests test -quiet`，74 项通过、0 失败、0 跳过；模块 1 基线 33 项全部回归通过。新增覆盖安全分块、Emoji/组合字符、双向偏移、远端跳转、跨块滚动/拖动/状态转换、内容版本失效、有界缓存、内存压力、硬性能阈值及运行期无全文重复布局。结果包为 `.build/Module2BaselineVerification/Logs/Test/Test-TakeFlow-2026.07.28_22-44-16-+0800.xcresult`。
+- 提交前全量 UI 测试：`xcodebuild ... -derivedDataPath .build/Module2BaselineVerification -only-testing:TakeFlowUITests test -quiet`，9 项通过、0 失败、0 跳过；模块 1 原 4 项全部回归通过，模块 2 的 5 项覆盖可访问控件与控制栏恢复、倒计时→运行→暂停→继续、拖动后继续、字号/速度/边距退出重入恢复、空稿不能进入运行状态。结果包为 `.build/Module2BaselineVerification/Logs/Test/Test-TakeFlow-2026.07.28_22-45-25-+0800.xcresult`。
+- 全量回归曾暴露模块 1 恢复文件日期仅存毫秒、内存 `Date` 保留更高精度导致旧 revision 偶发覆盖新 revision 的缺陷；版本比较已改用持久化的正式记录位版本，并把跨会话草稿时间归一化到毫秒。目标测试连续运行 10 次全部通过，结果包为 `.build/Module2FinalTests/Logs/Test/Test-TakeFlow-2026.07.28_21-01-00-+0800.xcresult`；随后 55 项全量测试再次通过。
+- 优化前证据：iPhone 17 Pro / iOS 26.0.1 模拟器测试进程中，SwiftData 读取 13.353 ms、Character/段落索引 134.181 ms、富文本构造 0.321 ms、TextKit 2 整篇赋值 16,182.854 ms、首次布局 9.048 ms、首屏计算 0.657 ms、中点锚点 13.003 ms、全文高度 0.005 ms、滚动与结束锚点 80.504 ms；TextKit 1 对照整篇赋值也为 14,218.354 ms，证明主要瓶颈是整篇文本赋值而非 SwiftData、SwiftUI 或 TextKit 版本。
+- 优化后分阶段观测（三轮范围）：SwiftData 读取 3.801–4.168 ms、后台块索引 91.065–106.028 ms、可见块富文本构造 0.079–0.100 ms、可见块赋值 1.061–1.335 ms、首次块布局 90.780–108.954 ms、首屏可见计算 0.176–0.186 ms、块内锚点 0.754–0.783 ms、虚拟高度与首屏 279.832–344.072 ms、桥接等价更新 0.301–0.399 ms、601 次可见区更新 41.684–50.203 ms。
+- 提交前连续三轮硬性能测试均通过：1 万字符从 SwiftData 读取到首屏可交互总耗时 400.907 / 351.355 / 354.299 ms（阈值 500 ms）；10 万字符 427.399 / 329.148 / 482.963 ms（阈值 2,000 ms）。设备为 iPhone 17 Pro 模拟器、iOS 26.0.1、Debug、Xcode 26.0.1；测量包含真实内存 SwiftData 值读取、后台索引及虚拟化首屏出现可见单元，属于本机内部防退化数据，不是真机性能保证。三轮各 7 项性能测试均通过，结果包为 `.build/Module2BaselinePerfRound1.xcresult` 至 `.build/Module2BaselinePerfRound3.xcresult`。
+- 字号、行距、边距和宽度的 10 万字符重排硬断言低于 1 秒；1,200 次运行更新硬断言低于 1 秒，源码路径和测试均证明不再周期性赋值或布局全文。真机连续滚动、触控、旋转、内存和热状态仍待 M2-08、M2-10。
+- 编译器未报告新增 Swift 源码警告；工程未加入网络、权限、摄像头、麦克风、语音、媒体、StoreKit、CloudKit、第三方依赖、密钥或正式签名资料；未开始模块 3。
+
 ## 规格审查：待确认、遗漏与技术风险
 
 下表保留规格原要求，只记录开发前需要解决的决策。除明确标为“阻断”的条目外，不代表删除或降低任何验收条件。
@@ -74,7 +93,7 @@
 | SPEC-004 | 隐私歧义 | 3、4、9 | 模块 3 必须把麦克风录入视频；模块 4 又称不得“记录或上传用户音频”。Speech Framework 在部分设备/语言下可能需要服务端识别，不能默认等同纯本地。 | 明确该禁令仅针对语音识别副本，还是也约束视频音轨；决定首版强制本地识别，或为系统/云端识别提供明确披露与同意。 | 待确认，阻断语音识别路径 |
 | SPEC-005 | 定义遗漏 | 4、5、6 | “基于稿件和录制时间生成字幕”未定义时间戳来源；自由发挥、漏词、重拍和片段替换会让稿件位置与真实语音不一致。 | 定义字幕对齐算法、置信度、人工校正入口、自由发挥文本来源及失败降级。 | 待确认 |
 | SPEC-006 | 权益歧义 | 4、7、8 | “有限次数语音跟随”没有计量单位和重置周期；永久买断是可选但无决定；AI 调用是否含额度未定义；离线权益的“合理”保留期不明确。 | 形成完整权益矩阵：计量事件、额度、周期、宽限期、退款/到期、永久权益、AI 成本与离线校验窗口。 | 待确认，阻断付费墙 |
-| SPEC-007 | 验收不可量化 | 1、2、3、6 | “不应明显卡死”“基本一致”“不卡住”“没有明显爆音”“无可感知漂移”等没有设备、样本、时长、容差和测量方法。 | 为 10 万字符编辑延迟、滚动速度误差、预览帧率、切点峰值和 10 分钟音画漂移设定数值阈值与测试设备。 | 待确认 |
+| SPEC-007 | 验收不可量化 | 1、2、3、6 | “不应明显卡死”“基本一致”“不卡住”“没有明显爆音”“无可感知漂移”等没有设备、样本、时长、容差和测量方法。 | 模块 2 已批准模拟器内部阈值：1 万字符 0.5 秒、10 万字符 2 秒、普通重排主线程冻结低于 1 秒；真机阈值及模块 1、3、6 指标仍需确定。 | 模块 2 内部防退化部分解决，其余待确认 |
 | SPEC-008 | 录制策略遗漏 | 3、5、6 | 未定义帧率、编码器、HDR/SDR、音频采样、4K 档位、旋转中行为、最低可用空间、热状态和最长录制策略。片段要求方向一致，但没有说明录制中旋转是锁定、切段还是拒绝。 | 在模块 3 开始前形成录制配置矩阵和中断/旋转状态表。 | 待确认 |
 | SPEC-009 | 存储遗漏 | 0、1、3、5、6、9 | 未定义原片段和成片保留期、项目删除/撤销关系、崩溃遗留文件回收、临时空间预算、备份排除、用户可见存储管理。长视频可能迅速耗尽空间。 | 定义项目目录、保留与清理策略、原子提交、备份策略、低空间阈值和用户确认规则。 | 待确认 |
 | SPEC-010 | 云端安全遗漏 | 7、9 | 规定客户端不存密钥，但未指定安全后端、认证、滥用防护、供应商、地域、保留/删除策略、最大稿长和隐私政策披露。 | AI 接入前批准后端架构及数据处理清单；未批准时只允许协议和测试 UI，不得声称服务可用。 | 待确认，阻断真实 AI |
@@ -97,6 +116,10 @@
 | 2026-07-28 | 在 600 ms 正式保存之外，每次编辑立即异步写入独立恢复快照；恢复文件位于 Application Support、采用原子替换与版本屏障；只有基础版本精确匹配且更新时才向用户提供恢复/保留选择，正式保存成功后清理 | Core/Persistence、ScriptEditor、崩溃恢复与后续迁移 | 模块 1 数据安全加固决策 |
 | 2026-07-28 | 删除采用 SwiftData 软删除标记与 5 秒撤销令牌；窗口内恢复，窗口结束后精确永久删除目标 UUID；复制生成新 UUID | ScriptEditor、后续项目引用规则 | 模块 1 架构决策 |
 | 2026-07-28 | 字数按去除空白后的扩展字素簇计数；预计时长默认 240 字符/分钟，可在 60–600 范围调整；最后阅读位置写入稿件记录并按正文长度夹紧 | ScriptEditor、Teleprompter 接口 | 模块 1 产品实现假设，待产品在后续模块确认默认语速 |
+| 2026-07-28 | 模块 2 使用 SwiftData V2 轻量迁移保存每稿提词偏好；速度单位固定为逻辑点/秒；阅读位置使用扩展字素簇偏移；滚动按单调时间运行段推导，布局像素不作为持久化事实 | Core/Persistence、Teleprompter、模块 3 后续复用 | 模块 2 架构决策 |
+| 2026-07-28 | 提词拖动期间使用滚动比例维护轻量近似锚点，结束时使用 TextKit 精确解析；这是为 10 万字符避免每帧全文命中布局的性能边界，不改变最终保存的 Character 锚点语义 | Teleprompter 文本桥接与长稿性能 | 模块 2 性能决策 |
+| 2026-07-28 | 长稿采用后台 `TeleprompterDocument` 分块索引和原生 Collection View 虚拟化；块目标 1,500、硬上限 2,200 Character，预取前 1 后 2，富文本 LRU 上限 8；全局 Character 锚点与原状态机保持唯一 | Teleprompter 长稿性能、模块 3 复用边界 | 模块 2 性能加固决策 |
+| 2026-07-28 | 模块 2 模拟器内部防退化阈值为：1 万字符首屏 0.5 秒、10 万字符首屏 2 秒、普通显示设置重排主线程冻结低于 1 秒；测试必须硬失败并记录设备/系统/方法，不能替代真机性能结论 | 模块 2 测试与发布风险记录 | 产品负责人（用户） |
 
 ## 更新规则
 

@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 
 enum ScriptModelContainer {
-    static let schema = Schema(ScriptSchemaV1.models)
+    static let schema = Schema(ScriptSchemaV2.models)
 
     static func make(
         isStoredInMemoryOnly: Bool = false,

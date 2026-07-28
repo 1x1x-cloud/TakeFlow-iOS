@@ -24,7 +24,14 @@ protocol ScriptLibraryServicing: Sendable {
     ) async throws
 }
 
-actor ScriptLibraryService: ScriptLibraryServicing {
+protocol TakeFlowServicing:
+    ScriptLibraryServicing,
+    TeleprompterScriptProviding
+{}
+
+actor ScriptLibraryService:
+    TakeFlowServicing
+{
     private let repository: any ScriptRepository
     private let recoveryStore: any ScriptRecoveryDraftStoring
     private let undoWindow: TimeInterval
@@ -115,17 +122,15 @@ actor ScriptLibraryService: ScriptLibraryServicing {
     func duplicate(id: UUID) async throws -> Script {
         let source = try await script(id: id)
         let duplicationDate = now()
-        let duplicate = prepared(
-            Script(
+        var duplicate = Script(
                 title: duplicateTitle(for: source.title),
                 content: source.content,
                 createdAt: duplicationDate,
-                speechRateCharactersPerMinute: source.speechRateCharactersPerMinute,
-                preferredFontSize: source.preferredFontSize,
-                preferredScrollSpeed: source.preferredScrollSpeed
-            ),
-            updateTimestamp: false
+                speechRateCharactersPerMinute:
+                    source.speechRateCharactersPerMinute
         )
+        TeleprompterPreferences(script: source).applying(to: &duplicate)
+        duplicate = prepared(duplicate, updateTimestamp: false)
 
         do {
             try await repository.save(duplicate)
@@ -273,6 +278,32 @@ actor ScriptLibraryService: ScriptLibraryServicing {
         }
     }
 
+    func teleprompterScript(id: UUID) async throws -> Script {
+        let storedScript = try await script(id: id)
+        if try await recoveryDraft(newerThan: storedScript) != nil {
+            throw AppError.pendingRecoveryDraftRequiresReview
+        }
+        return storedScript
+    }
+
+    func saveTeleprompterState(
+        scriptID: UUID,
+        anchor: ScriptReadingAnchor,
+        preferences: TeleprompterPreferences
+    ) async throws -> Script {
+        var storedScript = try await script(id: scriptID)
+        if try await recoveryDraft(newerThan: storedScript) != nil {
+            throw AppError.pendingRecoveryDraftRequiresReview
+        }
+
+        storedScript.lastReadPosition = ScriptMetrics.clampedReadPosition(
+            anchor.characterOffset,
+            content: storedScript.content
+        )
+        preferences.applying(to: &storedScript)
+        return try await update(storedScript)
+    }
+
     private func prepared(
         _ script: Script,
         updateTimestamp: Bool
@@ -290,6 +321,7 @@ actor ScriptLibraryService: ScriptLibraryServicing {
             script.lastReadPosition,
             content: script.content
         )
+        TeleprompterPreferences(script: result).applying(to: &result)
         if updateTimestamp {
             result.updatedAt = now()
         }

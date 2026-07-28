@@ -45,6 +45,7 @@ struct ScriptRecoveryDraft: Codable, Equatable, Sendable {
     var writeVersion: ScriptRecoveryDraftWriteVersion {
         ScriptRecoveryDraftWriteVersion(
             baseScriptUpdatedAt: baseScriptUpdatedAt,
+            baseScriptVersion: baseScriptVersion,
             draftUpdatedAt: draftUpdatedAt,
             sessionID: sessionID,
             revision: revision
@@ -59,20 +60,33 @@ struct ScriptRecoveryDraft: Codable, Equatable, Sendable {
 
 struct ScriptRecoveryDraftWriteVersion: Equatable, Sendable {
     let baseScriptUpdatedAt: Date
+    let baseScriptVersion: UInt64
     let draftUpdatedAt: Date
     let sessionID: UUID
     let revision: UInt64
 
     func isNewer(than other: Self) -> Bool {
-        if baseScriptUpdatedAt != other.baseScriptUpdatedAt {
+        if baseScriptVersion != other.baseScriptVersion {
             return baseScriptUpdatedAt > other.baseScriptUpdatedAt
         }
         if sessionID == other.sessionID {
             return revision > other.revision
         }
-        if draftUpdatedAt != other.draftUpdatedAt {
-            return draftUpdatedAt > other.draftUpdatedAt
+        let timestamp = normalizedMilliseconds(draftUpdatedAt)
+        let otherTimestamp = normalizedMilliseconds(
+            other.draftUpdatedAt
+        )
+        if timestamp != otherTimestamp {
+            return timestamp > otherTimestamp
         }
         return sessionID.uuidString > other.sessionID.uuidString
+    }
+
+    private func normalizedMilliseconds(_ date: Date) -> Int64 {
+        Int64(
+            (
+                date.timeIntervalSince1970 * 1_000
+            ).rounded(.towardZero)
+        )
     }
 }

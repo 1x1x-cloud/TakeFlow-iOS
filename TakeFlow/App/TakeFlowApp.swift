@@ -2,7 +2,7 @@ import SwiftUI
 
 @main
 struct TakeFlowApp: App {
-    private let service: any ScriptLibraryServicing
+    private let service: any TakeFlowServicing
 
     init() {
         let arguments = ProcessInfo.processInfo.arguments

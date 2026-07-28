@@ -12,6 +12,9 @@ enum AppError: Error, Equatable, Sendable {
     case recoveryDraftCorrupted
     case recoveryDraftVersionMismatch
     case recoveryDraftCleanupFailed
+    case pendingRecoveryDraftRequiresReview
+    case emptyScript
+    case scriptChangedDuringTeleprompter
     case cancelled
 }
 
@@ -40,6 +43,12 @@ extension AppError: LocalizedError {
             return "恢复草稿与当前稿件版本不匹配，已保留最近保存的版本。"
         case .recoveryDraftCleanupFailed:
             return "稿件已保存，但无法清理旧的恢复草稿，请稍后重试。"
+        case .pendingRecoveryDraftRequiresReview:
+            return "这份稿件有未完成编辑，请先在编辑器中选择要保留的版本。"
+        case .emptyScript:
+            return "稿件正文为空，请先输入内容再开始提词。"
+        case .scriptChangedDuringTeleprompter:
+            return "稿件正文已在其他位置修改。提词已暂停，请重新载入。"
         case .cancelled:
             return "操作已取消。"
         }

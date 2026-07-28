@@ -1,11 +1,16 @@
 import SwiftUI
 
-struct ScriptLibraryView: View {
-    private let service: any ScriptLibraryServicing
-    @StateObject private var viewModel: ScriptLibraryViewModel
-    @State private var path: [UUID] = []
+enum ScriptRoute: Hashable {
+    case edit(UUID)
+    case teleprompter(UUID)
+}
 
-    init(service: any ScriptLibraryServicing) {
+struct ScriptLibraryView: View {
+    private let service: any TakeFlowServicing
+    @StateObject private var viewModel: ScriptLibraryViewModel
+    @State private var path: [ScriptRoute] = []
+
+    init(service: any TakeFlowServicing) {
         self.service = service
         _viewModel = StateObject(
             wrappedValue: ScriptLibraryViewModel(service: service)
@@ -27,7 +32,7 @@ struct ScriptLibraryView: View {
                     Button {
                         Task {
                             if let id = await viewModel.createBlankScript() {
-                                path.append(id)
+                                path.append(.edit(id))
                             }
                         }
                     } label: {
@@ -43,8 +48,16 @@ struct ScriptLibraryView: View {
                 text: $viewModel.searchText,
                 prompt: ScriptEditorStrings.searchPrompt
             )
-            .navigationDestination(for: UUID.self) { scriptID in
-                ScriptEditorView(scriptID: scriptID, service: service)
+            .navigationDestination(for: ScriptRoute.self) { route in
+                switch route {
+                case .edit(let scriptID):
+                    ScriptEditorView(scriptID: scriptID, service: service)
+                case .teleprompter(let scriptID):
+                    TeleprompterView(
+                        scriptID: scriptID,
+                        service: service
+                    )
+                }
             }
             .overlay {
                 if viewModel.isLoading {
@@ -89,10 +102,26 @@ struct ScriptLibraryView: View {
 
     private var scriptList: some View {
         List(viewModel.scripts) { script in
-            NavigationLink(value: script.id) {
-                ScriptRow(script: script)
+            HStack(spacing: 12) {
+                NavigationLink(value: ScriptRoute.edit(script.id)) {
+                    ScriptRow(script: script)
+                }
+                .accessibilityIdentifier(
+                    "script.row.\(script.id.uuidString)"
+                )
+
+                Button {
+                    path.append(.teleprompter(script.id))
+                } label: {
+                    Image(systemName: "text.line.first.and.arrowtriangle.forward")
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(TeleprompterStrings.title)
+                .accessibilityIdentifier(
+                    "teleprompter.open.\(script.id.uuidString)"
+                )
             }
-            .accessibilityIdentifier("script.row.\(script.id.uuidString)")
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 Button(role: .destructive) {
                     viewModel.requestDelete(script)
@@ -152,7 +181,7 @@ struct ScriptLibraryView: View {
                 Button(ScriptEditorStrings.addScript) {
                     Task {
                         if let id = await viewModel.createBlankScript() {
-                            path.append(id)
+                            path.append(.edit(id))
                         }
                     }
                 }
