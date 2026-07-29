@@ -7,6 +7,9 @@ PRODUCT_MODULE_NAME = TakeFlow
 
 INFOPLIST_KEY_CFBundleDisplayName = 一遍成
 INFOPLIST_KEY_LSApplicationCategoryType = public.app-category.photo-video
+INFOPLIST_KEY_NSCameraUsageDescription = 用于在您主动进入摄像提词并开始录制时拍摄视频。
+INFOPLIST_KEY_NSMicrophoneUsageDescription = 用于在您主动开始视频录制时同步录制声音。
+INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = 仅在您主动选择保存到照片时添加已完成的视频。
 INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES
 INFOPLIST_KEY_UILaunchScreen_Generation = YES
 INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight

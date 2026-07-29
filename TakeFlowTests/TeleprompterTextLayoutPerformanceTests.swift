@@ -33,6 +33,41 @@ final class TeleprompterTextLayoutPerformanceTests: XCTestCase {
         )
     }
 
+    func testFittedChunkHeightContainsRenderedText() {
+        let cell = TeleprompterChunkCell(frame: viewport)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 18
+        let attributed = NSAttributedString(
+            string: makeContent(characterCount: 2_200),
+            attributes: [
+                .font: UIFont.systemFont(ofSize: 48),
+                .paragraphStyle: paragraph
+            ]
+        )
+        cell.apply(
+            attributedText: attributed,
+            chunkIndex: 0,
+            horizontalMargin: 24,
+            accessibilityValue: attributed.string
+        )
+        let estimated = UICollectionViewLayoutAttributes(
+            forCellWith: IndexPath(item: 0, section: 0)
+        )
+        estimated.size = CGSize(width: viewport.width, height: 120)
+        let fitted = cell.preferredLayoutAttributesFitting(estimated)
+        cell.frame = CGRect(
+            origin: .zero,
+            size: fitted.size
+        )
+        cell.layoutIfNeeded()
+
+        XCTAssertGreaterThanOrEqual(
+            fitted.size.height + 0.5,
+            ceil(cell.textView.contentSize.height),
+            "可见块拟合高度不得裁切块内正文"
+        )
+    }
+
     func testOneHundredThousandCharacterFirstScreenMeetsThreshold()
         async throws
     {

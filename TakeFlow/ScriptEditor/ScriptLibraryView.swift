@@ -3,15 +3,24 @@ import SwiftUI
 enum ScriptRoute: Hashable {
     case edit(UUID)
     case teleprompter(UUID)
+    case cameraRecording(UUID)
 }
 
 struct ScriptLibraryView: View {
     private let service: any TakeFlowServicing
+    private let cameraRecordingDependencies:
+        CameraRecordingDependencies
     @StateObject private var viewModel: ScriptLibraryViewModel
     @State private var path: [ScriptRoute] = []
 
-    init(service: any TakeFlowServicing) {
+    init(
+        service: any TakeFlowServicing,
+        cameraRecordingDependencies:
+            CameraRecordingDependencies
+    ) {
         self.service = service
+        self.cameraRecordingDependencies =
+            cameraRecordingDependencies
         _viewModel = StateObject(
             wrappedValue: ScriptLibraryViewModel(service: service)
         )
@@ -56,6 +65,13 @@ struct ScriptLibraryView: View {
                     TeleprompterView(
                         scriptID: scriptID,
                         service: service
+                    )
+                case .cameraRecording(let scriptID):
+                    CameraRecordingView(
+                        scriptID: scriptID,
+                        service: service,
+                        dependencies:
+                            cameraRecordingDependencies
                     )
                 }
             }
@@ -120,6 +136,18 @@ struct ScriptLibraryView: View {
                 .accessibilityLabel(TeleprompterStrings.title)
                 .accessibilityIdentifier(
                     "teleprompter.open.\(script.id.uuidString)"
+                )
+
+                Button {
+                    path.append(.cameraRecording(script.id))
+                } label: {
+                    Image(systemName: "video.fill")
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(CameraRecordingStrings.title)
+                .accessibilityIdentifier(
+                    "capture.open.\(script.id.uuidString)"
                 )
             }
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {

@@ -57,6 +57,27 @@
 		C00000000000000000000062 /* TeleprompterTextLayoutPerformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000062 /* TeleprompterTextLayoutPerformanceTests.swift */; };
 		C00000000000000000000063 /* TeleprompterDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000063 /* TeleprompterDocument.swift */; };
 		C00000000000000000000064 /* TeleprompterDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000064 /* TeleprompterDocumentTests.swift */; };
+		C00000000000000000000065 /* CaptureModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000065 /* CaptureModels.swift */; };
+		C00000000000000000000066 /* RecordingFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000066 /* RecordingFileStore.swift */; };
+		C00000000000000000000067 /* SystemStorageSpaceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000067 /* SystemStorageSpaceService.swift */; };
+		C00000000000000000000068 /* SystemPermissionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000068 /* SystemPermissionService.swift */; };
+		C00000000000000000000069 /* CaptureError.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000069 /* CaptureError.swift */; };
+		C0000000000000000000006A /* CaptureProtocols.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000006A /* CaptureProtocols.swift */; };
+		C0000000000000000000006B /* RecordingStateMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000006B /* RecordingStateMachine.swift */; };
+		C0000000000000000000006C /* AVFoundationCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000006C /* AVFoundationCaptureService.swift */; };
+		C0000000000000000000006D /* SystemPhotoLibraryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000006D /* SystemPhotoLibraryService.swift */; };
+		C0000000000000000000006E /* SystemAudioSessionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000006E /* SystemAudioSessionService.swift */; };
+		C0000000000000000000006F /* CameraRecordingDependencies.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000006F /* CameraRecordingDependencies.swift */; };
+		C00000000000000000000070 /* CameraRecordingStrings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000070 /* CameraRecordingStrings.swift */; };
+		C00000000000000000000071 /* CameraRecordingViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000071 /* CameraRecordingViewModel.swift */; };
+		C00000000000000000000072 /* CapturePreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000072 /* CapturePreviewView.swift */; };
+		C00000000000000000000073 /* CameraRecordingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000073 /* CameraRecordingView.swift */; };
+		C00000000000000000000074 /* RecordingStateMachineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000074 /* RecordingStateMachineTests.swift */; };
+		C00000000000000000000075 /* RecordingFileStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000075 /* RecordingFileStoreTests.swift */; };
+		C00000000000000000000076 /* CameraRecordingViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000076 /* CameraRecordingViewModelTests.swift */; };
+		C00000000000000000000077 /* CaptureConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000077 /* CaptureConfigurationTests.swift */; };
+		C00000000000000000000078 /* CameraTeleprompterIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000078 /* CameraTeleprompterIntegrationTests.swift */; };
+		C00000000000000000000079 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000079 /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -144,6 +165,27 @@
 		B00000000000000000000062 /* TeleprompterTextLayoutPerformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeleprompterTextLayoutPerformanceTests.swift; sourceTree = "<group>"; };
 		B00000000000000000000063 /* TeleprompterDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeleprompterDocument.swift; sourceTree = "<group>"; };
 		B00000000000000000000064 /* TeleprompterDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeleprompterDocumentTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000065 /* CaptureModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureModels.swift; sourceTree = "<group>"; };
+		B00000000000000000000066 /* RecordingFileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingFileStore.swift; sourceTree = "<group>"; };
+		B00000000000000000000067 /* SystemStorageSpaceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemStorageSpaceService.swift; sourceTree = "<group>"; };
+		B00000000000000000000068 /* SystemPermissionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemPermissionService.swift; sourceTree = "<group>"; };
+		B00000000000000000000069 /* CaptureError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureError.swift; sourceTree = "<group>"; };
+		B0000000000000000000006A /* CaptureProtocols.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureProtocols.swift; sourceTree = "<group>"; };
+		B0000000000000000000006B /* RecordingStateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingStateMachine.swift; sourceTree = "<group>"; };
+		B0000000000000000000006C /* AVFoundationCaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AVFoundationCaptureService.swift; sourceTree = "<group>"; };
+		B0000000000000000000006D /* SystemPhotoLibraryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemPhotoLibraryService.swift; sourceTree = "<group>"; };
+		B0000000000000000000006E /* SystemAudioSessionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemAudioSessionService.swift; sourceTree = "<group>"; };
+		B0000000000000000000006F /* CameraRecordingDependencies.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraRecordingDependencies.swift; sourceTree = "<group>"; };
+		B00000000000000000000070 /* CameraRecordingStrings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraRecordingStrings.swift; sourceTree = "<group>"; };
+		B00000000000000000000071 /* CameraRecordingViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraRecordingViewModel.swift; sourceTree = "<group>"; };
+		B00000000000000000000072 /* CapturePreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapturePreviewView.swift; sourceTree = "<group>"; };
+		B00000000000000000000073 /* CameraRecordingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraRecordingView.swift; sourceTree = "<group>"; };
+		B00000000000000000000074 /* RecordingStateMachineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingStateMachineTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000075 /* RecordingFileStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingFileStoreTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000076 /* CameraRecordingViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraRecordingViewModelTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000077 /* CaptureConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureConfigurationTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000078 /* CameraTeleprompterIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraTeleprompterIntegrationTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000079 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -232,6 +274,7 @@
 				B00000000000000000000006 /* UserPreferences.swift */,
 				B00000000000000000000050 /* TeleprompterPreferences.swift */,
 				B00000000000000000000061 /* ScriptReadingAnchor.swift */,
+				B00000000000000000000065 /* CaptureModels.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -248,6 +291,8 @@
 				B00000000000000000000046 /* ScriptRecoveryDraftStore.swift */,
 				B00000000000000000000047 /* FileScriptRecoveryDraftStore.swift */,
 				B00000000000000000000051 /* TeleprompterScriptProviding.swift */,
+				B00000000000000000000066 /* RecordingFileStore.swift */,
+				B00000000000000000000067 /* SystemStorageSpaceService.swift */,
 				B0000000000000000000003A /* Persistence README */,
 			);
 			path = Persistence;
@@ -257,6 +302,7 @@
 			isa = PBXGroup;
 			children = (
 				B00000000000000000000009 /* PermissionAuthorizing.swift */,
+				B00000000000000000000068 /* SystemPermissionService.swift */,
 			);
 			path = Permissions;
 			sourceTree = "<group>";
@@ -319,6 +365,17 @@
 			isa = PBXGroup;
 			children = (
 				B00000000000000000000022 /* CameraRecording README */,
+				B00000000000000000000069 /* CaptureError.swift */,
+				B0000000000000000000006A /* CaptureProtocols.swift */,
+				B0000000000000000000006B /* RecordingStateMachine.swift */,
+				B0000000000000000000006C /* AVFoundationCaptureService.swift */,
+				B0000000000000000000006D /* SystemPhotoLibraryService.swift */,
+				B0000000000000000000006E /* SystemAudioSessionService.swift */,
+				B0000000000000000000006F /* CameraRecordingDependencies.swift */,
+				B00000000000000000000070 /* CameraRecordingStrings.swift */,
+				B00000000000000000000071 /* CameraRecordingViewModel.swift */,
+				B00000000000000000000072 /* CapturePreviewView.swift */,
+				B00000000000000000000073 /* CameraRecordingView.swift */,
 			);
 			path = CameraRecording;
 			sourceTree = "<group>";
@@ -388,6 +445,11 @@
 				B00000000000000000000060 /* TeleprompterViewModelTests.swift */,
 				B00000000000000000000062 /* TeleprompterTextLayoutPerformanceTests.swift */,
 				B00000000000000000000064 /* TeleprompterDocumentTests.swift */,
+				B00000000000000000000074 /* RecordingStateMachineTests.swift */,
+				B00000000000000000000075 /* RecordingFileStoreTests.swift */,
+				B00000000000000000000076 /* CameraRecordingViewModelTests.swift */,
+				B00000000000000000000077 /* CaptureConfigurationTests.swift */,
+				B00000000000000000000078 /* CameraTeleprompterIntegrationTests.swift */,
 			);
 			path = TakeFlowTests;
 			sourceTree = "<group>";
@@ -416,6 +478,7 @@
 			children = (
 				B00000000000000000000001 /* TakeFlowApp.swift */,
 				B00000000000000000000002 /* HomeView.swift */,
+				B00000000000000000000079 /* PrivacyInfo.xcprivacy */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -525,6 +588,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C00000000000000000000079 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -584,6 +648,21 @@
 				C00000000000000000000056 /* TeleprompterTextView.swift in Sources */,
 				C00000000000000000000057 /* TeleprompterView.swift in Sources */,
 				C00000000000000000000061 /* ScriptReadingAnchor.swift in Sources */,
+				C00000000000000000000065 /* CaptureModels.swift in Sources */,
+				C00000000000000000000066 /* RecordingFileStore.swift in Sources */,
+				C00000000000000000000067 /* SystemStorageSpaceService.swift in Sources */,
+				C00000000000000000000068 /* SystemPermissionService.swift in Sources */,
+				C00000000000000000000069 /* CaptureError.swift in Sources */,
+				C0000000000000000000006A /* CaptureProtocols.swift in Sources */,
+				C0000000000000000000006B /* RecordingStateMachine.swift in Sources */,
+				C0000000000000000000006C /* AVFoundationCaptureService.swift in Sources */,
+				C0000000000000000000006D /* SystemPhotoLibraryService.swift in Sources */,
+				C0000000000000000000006E /* SystemAudioSessionService.swift in Sources */,
+				C0000000000000000000006F /* CameraRecordingDependencies.swift in Sources */,
+				C00000000000000000000070 /* CameraRecordingStrings.swift in Sources */,
+				C00000000000000000000071 /* CameraRecordingViewModel.swift in Sources */,
+				C00000000000000000000072 /* CapturePreviewView.swift in Sources */,
+				C00000000000000000000073 /* CameraRecordingView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -605,6 +684,11 @@
 				C00000000000000000000060 /* TeleprompterViewModelTests.swift in Sources */,
 				C00000000000000000000062 /* TeleprompterTextLayoutPerformanceTests.swift in Sources */,
 				C00000000000000000000064 /* TeleprompterDocumentTests.swift in Sources */,
+				C00000000000000000000074 /* RecordingStateMachineTests.swift in Sources */,
+				C00000000000000000000075 /* RecordingFileStoreTests.swift in Sources */,
+				C00000000000000000000076 /* CameraRecordingViewModelTests.swift in Sources */,
+				C00000000000000000000077 /* CaptureConfigurationTests.swift in Sources */,
+				C00000000000000000000078 /* CameraTeleprompterIntegrationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

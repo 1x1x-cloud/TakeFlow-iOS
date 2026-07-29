@@ -59,6 +59,19 @@
 - 模块 3 及后续摄像提词层必须复用提词状态机、锚点和服务协议，不得复制出第二套滚动状态或绕过恢复草稿检查。
 - 提词显示偏好与阅读位置通过 `TeleprompterScriptProviding` 保存；SwiftUI View 和 UIKit 文本桥接不得直接访问 SwiftData。
 
+### 摄像录制不变量
+
+- `RecordingStateMachine` 是录制生命周期的唯一事实来源；权限请求、会话配置、起录、录制、停止、完成、中断和失败不得由互相独立的 View 布尔值拼接。
+- `AVCaptureSession`、设备配置和 `AVCaptureMovieFileOutput` 调用只在独立串行执行上下文运行；delegate 事件必须携带录制 UUID，并在 `@MainActor` ViewModel 通过代次校验后更新 UI，旧回调不得污染新录制。
+- 录制能力必须从当前设备、Preset、格式、30 fps 范围和可用编码器动态探测。默认 1080p/30 fps/H.264；仅在实际支持时提供 4K/30 fps/HEVC；首发不得加入 60 fps、HDR、Dolby Vision、ProRes 或双摄同录。
+- 前摄预览默认镜像、文件默认不镜像；后摄预览和文件均不镜像。预览与输出分别使用 `AVCaptureDevice.RotationCoordinator` 和 `videoRotationAngle`，开始录制后锁定当前段的输出角度，录制中禁止切换摄像头。
+- 音频目标为 AAC 48 kHz；必须显示当前输入路由并监听路由和中断变化。麦克风不可用或音频配置失败时不得生成让用户误认为有声的正常成片。
+- 录制目录固定在 Application Support 下，以项目 UUID 和录制 UUID 隔离。元数据先于起录创建，临时 `.recording.mov` 只在完成回调后移动为可播放 `.mov`；中断、写入失败和遗留临时文件保留为 `recoverable`，不得冒充完成或自动删除。
+- 起录空间安全线为 500 MB，录制中安全停止线为 250 MB，默认每 5 秒检查一次；阈值集中在 `RecordingStoragePolicy`，修改后必须重跑低空间、并发停止和文件保留测试。
+- App 进入后台、来电或音频中断、会话被占用、媒体服务重置时不得继续录制；尽可能安全封口，回到前台后保持中断状态，必须由用户明确重新开始。
+- 私有目录录制不请求照片权限；仅用户主动保存时请求 `PHAccessLevel.addOnly`。拒绝后保留 App 内文件并继续提供系统分享。
+- 摄像提词层必须复用 `TeleprompterViewModel`、`TeleprompterPlaybackMachine`、`TeleprompterDocument` 和有界虚拟化视图。相机预览及状态事件不得触发整篇正文重新布局，提词和控制层不得进入 `AVCaptureMovieFileOutput`。
+
 ### 数据与文件安全
 
 - `Script`、`RecordingProject`、`RecordingSegment` 使用稳定 UUID；持久化关系和文件目录以 ID 关联，不以用户标题作为路径。

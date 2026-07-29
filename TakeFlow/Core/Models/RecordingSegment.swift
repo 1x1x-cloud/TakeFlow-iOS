@@ -3,6 +3,7 @@ import Foundation
 enum RecordingSegmentStatus: String, Codable, CaseIterable, Sendable {
     case recording
     case completed
+    case recoverable
     case discarded
     case failed
 }

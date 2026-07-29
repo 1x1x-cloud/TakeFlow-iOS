@@ -1,9 +1,9 @@
 # 开发状态
 
-最后更新：2026-07-28
+最后更新：2026-07-29
 产品规格：`PRODUCT_SPEC.md` 1.0
 总体状态：进行中
-当前阶段：模块 0 已完成；模块 1、模块 2 的实现、模拟器构建和自动化验收已通过，真机验收待执行；模块 2 的 10 万字符模拟器性能阻断已通过分块虚拟化解决，真实设备性能仍待验证
+当前阶段：模块 0 已完成；模块 1、模块 2、模块 3 的实现、模拟器构建和自动化验收已通过，真机验收待执行；模块 3 的真实摄像头、麦克风、方向、镜像、蓝牙、相册、长录制与中断恢复仍必须在设备上验证
 
 ## 状态定义
 
@@ -19,7 +19,7 @@
 | 0 | 工程初始化与规则建立 | 已完成 | iPhone、iPad 模拟器构建通过 | 5 通过、0 失败 | 模拟器启动通过；正式签名、真机与 TestFlight 未验证 | `TakeFlow` App、单测、UI 测试三个 Target 已建立；发布前手动项见 M0-01 至 M0-06 |
 | 1 | 稿件管理与编辑 | 进行中 | iPhone、iPad 模拟器 Debug 构建通过 | 单元测试 33/33；UI 测试 4/4 | M1-01 至 M1-07 待执行 | SwiftData 本地持久化、V1 Schema 与独立恢复草稿已落地；状态保留为“进行中”，直到真机强杀恢复、输入、性能、离线和低存储验收完成 |
 | 2 | 基础提词器 | 进行中 | iPhone、iPad 模拟器 Debug 构建通过 | 单元测试 74/74；UI 测试 9/9（含模块 1 全量回归） | M2-01 至 M2-10 待执行 | 固定速度、唯一状态机、全局 Character 锚点、每稿偏好及有界分块虚拟化已实现；模拟器 1 万/10 万字符内部阈值通过，真机滚动、辅助功能及长稿性能未验收 |
-| 3 | 摄像头与视频录制 | 未开始 | 未运行 | 未运行 | 未执行 | — |
+| 3 | 摄像头与视频录制 | 进行中 | iPhone、iPad 模拟器 Debug、Generic iOS Device 无签名 Debug、Generic iOS Device 无签名 Release 构建通过 | 单元测试 131/131；UI 测试 17/17（含模块 1、2 全量回归）；模块 2 性能测试冷启动后连续三轮通过 | M3-01 至 M3-15 待执行 | 显式录制状态机、AVFoundation 串行服务、动态能力矩阵、私有录制文件恢复、低空间保护、Debug-only Fake UI 流程和提词器叠加已实现；本地提交只代表软件与模拟器基线，不能替代真实硬件验收 |
 | 4 | 实时语音跟随 | 未开始 | 未运行 | 未运行 | 未执行 | 语音识别隐私路径需先确认 |
 | 5 | 分段录制与错句重拍 | 未开始 | 未运行 | 未运行 | 未执行 | — |
 | 6 | 视频拼接、字幕与导出 | 未开始 | 未运行 | 未运行 | 未执行 | 字幕时间来源与量化标准需先确认 |
@@ -27,23 +27,25 @@
 | 8 | 订阅与权限控制 | 未开始 | 未运行 | 未运行 | 未执行 | 商品、权益细则与免费额度未定 |
 | 9 | 隐私、稳定性与上架准备 | 未开始 | 未运行 | 未运行 | 未执行 | 依赖前序模块与外部政策/条款地址 |
 
-## 当前构建与测试事实
+## 构建与测试事实
 
-验证日期：2026-07-28
+验证日期：2026-07-29
+
+### 模块 0 验证事实
 
 - 工具链：完整 Xcode 26.0.1（Build 17A400），Apple Swift 6.2，iOS/iOS Simulator SDK 26.0。
 - 可用运行时：iOS Simulator 26.0.1；已使用 iPhone 17 Pro 与 iPad Pro 11-inch (M4)。
 - 工程解析：`plutil -lint TakeFlow.xcodeproj/project.pbxproj` 通过；`xcodebuild -list` 识别 `TakeFlow`、`TakeFlowTests`、`TakeFlowUITests` 和共享 Scheme `TakeFlow`。
 - iPhone 构建：Debug、iPhone 17 Pro 模拟器，提交前基线复验 `BUILD SUCCEEDED`；产物位于被忽略的 `.build/BaselineDerivedData`。
 - iPad 构建：Debug、iPad Pro 11-inch (M4) 模拟器，`BUILD SUCCEEDED`。
-- 提交前全量测试：共享 Scheme 共 5 项，5 通过、0 失败、0 跳过；结果包位于被忽略的 `.build/BaselineAllTests.xcresult`。
+- 模块 0 提交前全量测试：当时共享 Scheme 共 5 项，5 通过、0 失败、0 跳过；结果包位于被忽略的 `.build/BaselineAllTests.xcresult`。
 - 单元测试：`TakeFlowTests` 共 4 项，4 通过、0 失败。
 - UI 测试：`testLaunchShowsMinimalHome` 共 1 项，1 通过、0 失败；测试真实启动 App 并断言 `home.title` 与 `home.status` 存在。
 - 首页视觉核对：已在 iPhone 17 Pro 模拟器重新安装并启动 App，确认显示“首页”“一遍成”“工程基础已就绪”。
 - 编译器未报告 Swift 源码警告。Xcode 26 的 `appintentsmetadataprocessor` 对未链接 AppIntents 的 Target 输出一次系统工具提示：“Metadata extraction skipped. No AppIntents.framework dependency found.” 本项目未使用 AppIntents，不影响产物；该提示不来自项目源码。
 - 未配置正式开发团队、正式 Bundle ID、权限 entitlement 或真实密钥；当前 Bundle ID 为 `com.example.takeflow.placeholder`。
 - 正式签名、真实 iPhone/iPad 安装和 TestFlight 分发尚未验证，不能作为发布就绪证据。
-- 未引入第三方包或 SDK；当前业务实现仅限模块 1 和模块 2，模块 3 至模块 9 的目录仍只保留边界说明。
+- 未引入第三方包或 SDK；当前业务实现仅限模块 1、模块 2 和模块 3，模块 4 至模块 9 的目录仍只保留边界说明。
 
 ### 模块 1 验证事实
 
@@ -79,7 +81,31 @@
 - 优化后分阶段观测（三轮范围）：SwiftData 读取 3.801–4.168 ms、后台块索引 91.065–106.028 ms、可见块富文本构造 0.079–0.100 ms、可见块赋值 1.061–1.335 ms、首次块布局 90.780–108.954 ms、首屏可见计算 0.176–0.186 ms、块内锚点 0.754–0.783 ms、虚拟高度与首屏 279.832–344.072 ms、桥接等价更新 0.301–0.399 ms、601 次可见区更新 41.684–50.203 ms。
 - 提交前连续三轮硬性能测试均通过：1 万字符从 SwiftData 读取到首屏可交互总耗时 400.907 / 351.355 / 354.299 ms（阈值 500 ms）；10 万字符 427.399 / 329.148 / 482.963 ms（阈值 2,000 ms）。设备为 iPhone 17 Pro 模拟器、iOS 26.0.1、Debug、Xcode 26.0.1；测量包含真实内存 SwiftData 值读取、后台索引及虚拟化首屏出现可见单元，属于本机内部防退化数据，不是真机性能保证。三轮各 7 项性能测试均通过，结果包为 `.build/Module2BaselinePerfRound1.xcresult` 至 `.build/Module2BaselinePerfRound3.xcresult`。
 - 字号、行距、边距和宽度的 10 万字符重排硬断言低于 1 秒；1,200 次运行更新硬断言低于 1 秒，源码路径和测试均证明不再周期性赋值或布局全文。真机连续滚动、触控、旋转、内存和热状态仍待 M2-08、M2-10。
-- 编译器未报告新增 Swift 源码警告；工程未加入网络、权限、摄像头、麦克风、语音、媒体、StoreKit、CloudKit、第三方依赖、密钥或正式签名资料；未开始模块 3。
+- 模块 2 基线提交时编译器未报告新增 Swift 源码警告；当时未加入网络、权限、摄像头、麦克风、语音、媒体、StoreKit、CloudKit、第三方依赖、密钥或正式签名资料。模块 3 后续实现没有改变模块 2 的状态机、全局 Character 锚点或有界虚拟化事实来源。
+
+### 模块 3 验证事实
+
+- 基线：开始实现前及发布静态复验开始时，`HEAD` 均为模块 2 本地基线 `cadf791061fc5d738550249f253dba8206316e00`，分支 `master`；模块 0、1、2 提交依次为 `57e1563`、`a9c13d3`、`cadf791`。本节随模块 3 软件与模拟器本地基线提交建立；模块 4 未开始。
+- 架构：`CameraRecordingViewModel` 位于 `@MainActor`，只组合权限、录制、文件、空间、照片和音频会话协议；`AVFoundationCaptureService` 在独立串行队列管理 `AVCaptureSession`、设备和 `AVCaptureMovieFileOutput`。Delegate 与系统通知转换为带录制 UUID 的异步事件，显式状态机区分 `idle`、`requestingPermissions`、`configuring`、`ready`、`starting`、`recording`、`stopping`、`finished`、`interrupted` 和 `failed`，并拒绝重复开始、重复停止、录制中切换及过期回调。
+- 能力与媒体配置：运行时检查 session preset、设备 format 的 30 fps 范围及 Movie Output 可用 codec；默认 1080p/30 fps/H.264，仅在当前设备完整支持时提供 4K/30 fps/HEVC，并有类型化安全降级。音频目标为 AAC、48 kHz，系统音频会话允许可用 Bluetooth HFP 输入并将路由变化转换为明确 UI 状态；麦克风未授权或无输入时不进入正常含声录制流程。
+- 方向与镜像：预览与输出 connection 独立配置，使用 `AVCaptureDevice.RotationCoordinator` 的 `videoRotationAngleForHorizonLevelPreview` 和 `videoRotationAngleForHorizonLevelCapture`；开始录制时冻结输出角度，录制中旋转只更新预览及锁定提示。前摄预览镜像、Movie Output 不镜像，后摄两者均不镜像；未使用已废弃 `videoOrientation`。
+- 文件安全：录制位于 `Application Support/TakeFlow/Recordings/<project UUID>`，每次使用独立 recording UUID 和 `Temporary` 临时文件。项目元数据先原子写入，只有 Movie Output 完成回调成功后才移动到 `Segments` 并标记可播放；中断、写入失败和遗留临时文件保留为待检查/可恢复，不冒充正常文件。启动扫描、损坏元数据隔离、唯一命名、精确项目目录删除和跨实例恢复均有测试；日志不记录正文、媒体内容或完整本地路径。
+- 存储空间：`RecordingStoragePolicy` 集中定义起录安全线 500 MB、录制中安全停止线 250 MB 和 5 秒轮询间隔；生产实现读取当前卷重要用途可用容量，测试通过注入服务覆盖边界。低空间、文件写入失败、中断、后台及停止竞争只提交一次安全停止，已经落盘的临时内容保留。
+- 权限与导出：摄像头和麦克风按进入摄像提词流程请求；录制到私有目录不请求照片权限。用户主动保存时仅请求 Photos `addOnly`；拒绝或失败仍保留 App 内文件并允许系统分享。`PrivacyInfo.xcprivacy` 已加入 Target，磁盘可用空间 required-reason API 声明与当前实现一致。
+- 提词器复用：摄像头界面直接复用 `TeleprompterPlaybackMachine`、`TeleprompterDocument`、`TeleprompterViewModel` 和现有分块 Collection View，不存在第二套滚动状态，也没有恢复整篇 TextKit 赋值。摄像头预览、录制连接与 SwiftUI 提词/控制叠加层分离，因此 UI 不进入 Movie Output 媒体流；真实录制文件像素仍需 M3-04 真机验证。
+- 模块 2 性能回归期间发现可见块仍触发通用自适应布局和重复锚点校准。修复后，每个可见块使用有界 TextKit 1 单元与 `boundingRect` 高度计算，先按全局 Character 跳转目标块，再在下一次主 actor 调度中完成块内精确校准；revision 屏障避免旧布局覆盖新布局。全文索引、唯一状态机、全局 Character 锚点、块目标 1,500/硬上限 2,200 和富文本 LRU 上限 8 均保持不变。
+- 最终 iPhone 构建：`xcodebuild -project TakeFlow.xcodeproj -scheme TakeFlow -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -derivedDataPath .build/Module3FinalBuild-iPhone build -quiet`，iPhone 17 Pro / iOS 26.0.1，退出码 0。
+- 最终 iPad 构建：`xcodebuild -project TakeFlow.xcodeproj -scheme TakeFlow -configuration Debug -destination 'platform=iOS Simulator,name=iPad Pro 11-inch (M4)' -derivedDataPath .build/Module3FinalBuild-iPad build -quiet`，iPad Pro 11-inch (M4) / iOS 26.0.1，退出码 0。
+- Generic iOS Device Debug 编译：`xcodebuild -project TakeFlow.xcodeproj -scheme TakeFlow -configuration Debug -destination 'generic/platform=iOS' -derivedDataPath .build/Module3DeviceDebug CODE_SIGNING_ALLOWED=NO build -quiet`，退出码 0。Release 编译使用相同 Generic iOS Device、`.build/Module3DeviceRelease`、`CODE_SIGNING_ALLOWED=NO`，并设置 `SWIFT_TREAT_WARNINGS_AS_ERRORS=YES`、`GCC_TREAT_WARNINGS_AS_ERRORS=YES`，`BUILD SUCCEEDED`；实际 arm64 产物最低版本为 iOS 17.0。首次把条件编译跨越 SwiftUI `else if` 分支时编译失败，修正为独立 `@ViewBuilder` 边界后最终复验通过，失败期间没有提交。
+- Release 产品审计：生产 App 只包含二进制、`Info.plist`、`PrivacyInfo.xcprivacy` 和 `PkgInfo`，无测试媒体、测试 Bundle、调试菜单或代码签名目录。UI 测试启动参数、Fake Capture 服务、Fake 权限/空间/照片/音频服务及 Fake 预览文案均由 `#if DEBUG` 隔离；对 Release 二进制执行字符串和符号扫描，相关匹配为 0。未写入 `DEVELOPMENT_TEAM`，Bundle ID 仍是明确占位值 `com.example.takeflow.placeholder`。
+- iOS 17 与权限审计：Generic arm64 iOS 17 编译在警告即错误模式下通过；源码没有无保护的 iOS 18、iOS 26 或 Beta API，也未使用已废弃 `videoOrientation`。`AVCaptureDevice.RotationCoordinator` 与 `videoRotationAngle` 在本机 iOS SDK 头文件中标注 iOS 17 可用。Release `Info.plist` 的摄像头说明为“用于在您主动进入摄像提词并开始录制时拍摄视频。”，麦克风说明为“用于在您主动开始视频录制时同步录制声音。”，照片添加说明为“仅在您主动选择保存到照片时添加已完成的视频。”；不存在 `NSPhotoLibraryUsageDescription`，代码只使用 Photos `.addOnly`。
+- 隐私清单：源码与 Release App 内嵌 `PrivacyInfo.xcprivacy` 均通过 `plutil -lint`。清单声明不跟踪、无跟踪域、无收集数据类型，仅为实际使用的磁盘可用空间 API 声明 `NSPrivacyAccessedAPICategoryDiskSpace` / `E174.1`；与当前无网络客户端、无分析 SDK、无照片读取权限的代码一致。
+- 最终全量单元测试：`xcodebuild ... -derivedDataPath .build/Module3ReleaseBaseline -resultBundlePath .build/Module3ReleaseBaseline-Units-Retry-20260729.xcresult -only-testing:TakeFlowTests test -quiet`，iPhone 17 Pro / iOS 26.0.1，131 项通过、0 失败、0 跳过。包含模块 1、2 的 74 项基线、56 项模块 3 状态/配置/文件/ViewModel/集成测试和 1 项可见块裁切回归测试。
+- 最终全量 UI 测试：`xcodebuild ... -derivedDataPath .build/Module3ReleaseBaseline -resultBundlePath .build/Module3ReleaseBaseline-UI-Final-20260729.xcresult -only-testing:TakeFlowUITests test -quiet`，17 项通过、0 失败、0 跳过。新增 8 项 Fake Capture 流程覆盖允许→就绪→倒计时→录制→停止→本地预览、摄像头拒绝、麦克风拒绝、中断保留、低空间、录制中切换禁用、回前台不自动恢复，以及提词开始/暂停/拖动继续；Fake 仅存在于 Debug。
+- 本轮 UI 首次全量复验为 16/17：失败结果包证明 App 已出现新的“正在滚动”元素，但 XCTest 仍轮询倒计时阶段的旧 SwiftUI 可访问性元素。等待器改为每次轮询重新读取可访问性树；期间模拟器服务也出现元素已经存在但 `waitForExistence` 超时及冷启动等待系统 App 约 110 秒的异常。只重启模拟器、不抹除数据后，目标流程 1/1 和最终全量 17/17 通过；没有延长原状态时限、删除测试或接受错误状态。
+- 模块 2 硬性能测试使用 iPhone 17 Pro / iOS 26.0.1 模拟器、Debug、从 SwiftData 值读取和后台索引到虚拟化首屏可交互的既定测量方式。一次受模拟器服务异常迟滞影响的尝试真实失败：1 万字符 553.339 ms（读取 5.203、索引 62.222、渲染 485.864 ms），超过 500 ms；同一轮测试进程总耗时异常膨胀到 124 秒。未放宽阈值；冷重启后从零连续三轮各 8/8 通过：1 万字符 236.269 / 430.771 / 248.552 ms（阈值 500 ms），10 万字符 470.239 / 739.123 / 534.147 ms（阈值 2,000 ms）。结果包为 `.build/Module3ReleaseBaseline-Perf-Clean1-20260729.xcresult` 至 `Clean3`；远端跳转、跨块重排、运行事件和缓存上限断言均通过。这些是本机模拟器防退化数据，不是真机保证。
+- 最终源码与产品静态检查通过：Swift/GCC 警告即错误构建没有项目源码警告；Xcode 的 AppIntents 元数据工具仍输出既有“未链接 AppIntents，跳过提取”提示。`plutil -lint` 对工程和隐私清单通过，`git diff --check` 通过；扫描未发现密钥、账号、证书、签名资料、构建产物、第三方 SDK、正式 `DEVELOPMENT_TEAM`、完整照片读取权限或模块 4 代码。
+- 真实摄像头、麦克风、编码器、镜像、方向、焦点/曝光、防抖、Bluetooth 路由、系统中断、媒体服务重置、低空间封口、Photos、30 分钟热量/功耗/音画同步与异常文件可播放性无法由模拟器证明，模块状态保持“进行中”，详见 M3-01 至 M3-15。
 
 ## 规格审查：待确认、遗漏与技术风险
 
@@ -94,11 +120,11 @@
 | SPEC-005 | 定义遗漏 | 4、5、6 | “基于稿件和录制时间生成字幕”未定义时间戳来源；自由发挥、漏词、重拍和片段替换会让稿件位置与真实语音不一致。 | 定义字幕对齐算法、置信度、人工校正入口、自由发挥文本来源及失败降级。 | 待确认 |
 | SPEC-006 | 权益歧义 | 4、7、8 | “有限次数语音跟随”没有计量单位和重置周期；永久买断是可选但无决定；AI 调用是否含额度未定义；离线权益的“合理”保留期不明确。 | 形成完整权益矩阵：计量事件、额度、周期、宽限期、退款/到期、永久权益、AI 成本与离线校验窗口。 | 待确认，阻断付费墙 |
 | SPEC-007 | 验收不可量化 | 1、2、3、6 | “不应明显卡死”“基本一致”“不卡住”“没有明显爆音”“无可感知漂移”等没有设备、样本、时长、容差和测量方法。 | 模块 2 已批准模拟器内部阈值：1 万字符 0.5 秒、10 万字符 2 秒、普通重排主线程冻结低于 1 秒；真机阈值及模块 1、3、6 指标仍需确定。 | 模块 2 内部防退化部分解决，其余待确认 |
-| SPEC-008 | 录制策略遗漏 | 3、5、6 | 未定义帧率、编码器、HDR/SDR、音频采样、4K 档位、旋转中行为、最低可用空间、热状态和最长录制策略。片段要求方向一致，但没有说明录制中旋转是锁定、切段还是拒绝。 | 在模块 3 开始前形成录制配置矩阵和中断/旋转状态表。 | 待确认 |
+| SPEC-008 | 已解决 | 3、5、6 | 模块 3 启动前已批准视频、音频、镜像、方向、中断、文件、空间和照片权限矩阵。 | 默认 1080p/30 fps/H.264；能力允许时 4K/30 fps/HEVC；AAC 48 kHz；录制段方向锁定；500/250 MB 空间线；私有目录录制与 Photos add-only 分离。 | 2026-07-29 已解决 |
 | SPEC-009 | 存储遗漏 | 0、1、3、5、6、9 | 未定义原片段和成片保留期、项目删除/撤销关系、崩溃遗留文件回收、临时空间预算、备份排除、用户可见存储管理。长视频可能迅速耗尽空间。 | 定义项目目录、保留与清理策略、原子提交、备份策略、低空间阈值和用户确认规则。 | 待确认 |
 | SPEC-010 | 云端安全遗漏 | 7、9 | 规定客户端不存密钥，但未指定安全后端、认证、滥用防护、供应商、地域、保留/删除策略、最大稿长和隐私政策披露。 | AI 接入前批准后端架构及数据处理清单；未批准时只允许协议和测试 UI，不得声称服务可用。 | 待确认，阻断真实 AI |
 | SPEC-011 | 分析隐私遗漏 | 9 | 成功指标要求匿名非内容型分析，但未指定事件定义、匿名方式、同意机制、SDK/自建方案、标识符、保留期和退出机制。 | 先定义最小事件字典与隐私方案；未批准前不采集。 | 待确认 |
-| SPEC-012 | iOS 平台限制 | 3、9 | 普通 iOS App 进入后台后不能依赖摄像头继续录制。规格允许“安全停止或保存当前片段”，这是可实现路径，但不能承诺后台持续拍摄。 | 明确后台行为为立即安全封口当前片段、保存恢复点，并在回到前台提示用户。 | 风险已标记 |
+| SPEC-012 | iOS 平台限制 | 3、9 | 普通 iOS App 进入后台后不能依赖摄像头继续录制。规格允许“安全停止或保存当前片段”，这是可实现路径，但不能承诺后台持续拍摄。 | 模块 3 已实现进入后台时发起一次安全停止、保留完成或可恢复文件、回前台不自动继续；真实系统调度与封口结果仍待 M3-07 验证。 | 实现完成，真机风险待验证 |
 | SPEC-013 | 设备能力风险 | 3、4 | 4K、特定焦点/曝光模式、前后摄像头组合、蓝牙麦克风和本地语音识别并非所有 iOS 17 设备都支持。 | 全部能力运行时探测、隐藏不可用选项、保留固定速度与 1080p 降级，并建立设备矩阵。 | 风险已标记 |
 | SPEC-014 | 性能风险 | 3、5、6 | 30 分钟 4K 录制、多片段合成、字幕烧录可能产生显著发热、存储和导出耗时；后台/锁屏也会中断导出或录制。 | 采用分阶段写入、进度与取消、热状态提示、空间预估，并在目标真机上建立基准。 | 风险已标记 |
 | SPEC-015 | 上架依赖遗漏 | 8、9 | 隐私政策、使用条款、支持页面、订阅商品 ID、App Store Connect 配置、截图设备/语言和 App Review 账号尚未提供。 | 模块 8 前确定商品；模块 9 前提供有效公开 URL、商店资料和审核说明输入。 | 待外部资料 |
@@ -120,6 +146,9 @@
 | 2026-07-28 | 提词拖动期间使用滚动比例维护轻量近似锚点，结束时使用 TextKit 精确解析；这是为 10 万字符避免每帧全文命中布局的性能边界，不改变最终保存的 Character 锚点语义 | Teleprompter 文本桥接与长稿性能 | 模块 2 性能决策 |
 | 2026-07-28 | 长稿采用后台 `TeleprompterDocument` 分块索引和原生 Collection View 虚拟化；块目标 1,500、硬上限 2,200 Character，预取前 1 后 2，富文本 LRU 上限 8；全局 Character 锚点与原状态机保持唯一 | Teleprompter 长稿性能、模块 3 复用边界 | 模块 2 性能加固决策 |
 | 2026-07-28 | 模块 2 模拟器内部防退化阈值为：1 万字符首屏 0.5 秒、10 万字符首屏 2 秒、普通显示设置重排主线程冻结低于 1 秒；测试必须硬失败并记录设备/系统/方法，不能替代真机性能结论 | 模块 2 测试与发布风险记录 | 产品负责人（用户） |
+| 2026-07-29 | 模块 3 录制矩阵采用默认 1080p/30 fps/H.264、能力允许时 4K/30 fps/HEVC、AAC 48 kHz；前摄只镜像预览，录制段冻结 Rotation Coordinator 输出角度；不提供 60 fps、HDR、ProRes、双摄或后台持续录制 | CameraRecording、后续片段与导出兼容性 | 产品负责人（用户） |
+| 2026-07-29 | 录制采用唯一显式状态机和带 UUID 的异步事件；AVFoundation 隔离在串行服务，文件先建元数据和独立临时文件，只有完成回调成功后提交为可播放；500 MB 阻止起录、250 MB 安全停止，Photos 仅在主动保存时 add-only 请求 | CameraRecording、Core/Persistence、模块 5/6 接口 | 模块 3 架构决策 |
+| 2026-07-29 | 摄像头叠加继续复用模块 2 的唯一提词状态机、全局 Character 锚点和分块虚拟化；可见块改用有界 TextKit 1 与确定高度计算，锚点精调延后一轮主 actor 并由 revision 防止过期回调，LRU 上限仍为 8 | Teleprompter、CameraRecording、长稿性能 | 模块 3 性能回归决策 |
 
 ## 更新规则
 

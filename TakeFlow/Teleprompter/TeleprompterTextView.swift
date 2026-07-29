@@ -72,6 +72,7 @@ struct TeleprompterTextView: UIViewRepresentable {
         private var lastLayoutSize = CGSize.zero
         private var lastReportedOffset = -Double.infinity
         private var lastReportedMaximumOffset = -Double.infinity
+        private var anchorRestorationRevision = 0
 
         var cachedChunkIndices: Set<Int> {
             Set(textCache.values.keys)
@@ -171,7 +172,6 @@ struct TeleprompterTextView: UIViewRepresentable {
                 animated: false
             )
             collectionView.reloadData()
-            collectionView.layoutIfNeeded()
             restoreAnchor(anchor, in: collectionView)
         }
 
@@ -393,51 +393,52 @@ struct TeleprompterTextView: UIViewRepresentable {
                 item: location.chunkIndex,
                 section: 0
             )
+            anchorRestorationRevision += 1
+            let restorationRevision = anchorRestorationRevision
             collectionView.scrollToItem(
                 at: indexPath,
                 at: .top,
                 animated: false
             )
-            collectionView.layoutIfNeeded()
-
-            var requestedOffset: Double
-            if let cell = collectionView.cellForItem(
-                at: indexPath
-            ) as? TeleprompterChunkCell,
-               let attributes = collectionView.layoutAttributesForItem(
-                at: indexPath
-               ) {
-                let caret = cell.caretRect(
-                    forLocalCharacterOffset:
-                        location.localCharacterOffset
-                )
-                requestedOffset = Double(
-                    attributes.frame.minY + caret.minY - 32
-                )
-            } else if let attributes =
-                collectionView.layoutAttributesForItem(at: indexPath) {
-                let chunk = document.chunks[location.chunkIndex]
-                let fraction = chunk.characterCount > 0
-                    ? Double(location.localCharacterOffset)
-                        / Double(chunk.characterCount)
-                    : 0
-                requestedOffset = Double(
-                    attributes.frame.minY
-                        + attributes.frame.height * fraction
-                        - 32
-                )
-            } else {
-                requestedOffset = 0
-            }
-
-            applyProgrammaticOffset(
-                requestedOffset,
-                to: collectionView
-            )
             reportLayout(
                 collectionView,
                 characterOffset: anchor.characterOffset
             )
+
+            guard location.localCharacterOffset > 0 else {
+                return
+            }
+            let expectedContentRevision = document.contentRevision
+            let expectedLayoutRevision = appliedLayoutRevision
+            Task { @MainActor [weak self, weak collectionView] in
+                await Task.yield()
+                guard let self,
+                      let collectionView,
+                      anchorRestorationRevision == restorationRevision,
+                      appliedContentRevision == expectedContentRevision,
+                      appliedLayoutRevision == expectedLayoutRevision,
+                      let cell = collectionView.cellForItem(
+                        at: indexPath
+                      ) as? TeleprompterChunkCell,
+                      let attributes =
+                        collectionView.layoutAttributesForItem(
+                            at: indexPath
+                        ) else {
+                    return
+                }
+                let caret = cell.caretRect(
+                    forLocalCharacterOffset:
+                        location.localCharacterOffset
+                )
+                applyProgrammaticOffset(
+                    Double(attributes.frame.minY + caret.minY - 32),
+                    to: collectionView
+                )
+                reportLayout(
+                    collectionView,
+                    characterOffset: anchor.characterOffset
+                )
+            }
         }
 
         private func finishDragging(_ collectionView: UICollectionView) {
@@ -603,8 +604,12 @@ struct TeleprompterTextView: UIViewRepresentable {
 final class TeleprompterChunkCell: UICollectionViewCell {
     static let reuseIdentifier = "TeleprompterChunkCell"
 
-    let textView = UITextView(usingTextLayoutManager: true)
+    // TextKit 1 is materially faster for these bounded, non-editable chunks
+    // on the supported simulator/runtime matrix. The document is still
+    // virtualized and never assigned to a single full-text view.
+    let textView = UITextView(usingTextLayoutManager: false)
     private var representedChunkIndex: Int?
+    private var horizontalMargin: CGFloat = 0
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -635,12 +640,36 @@ final class TeleprompterChunkCell: UICollectionViewCell {
         nil
     }
 
+    override func preferredLayoutAttributesFitting(
+        _ layoutAttributes: UICollectionViewLayoutAttributes
+    ) -> UICollectionViewLayoutAttributes {
+        guard let fitted = layoutAttributes.copy()
+            as? UICollectionViewLayoutAttributes else {
+            return layoutAttributes
+        }
+        let textWidth = max(
+            1,
+            layoutAttributes.size.width - horizontalMargin * 2
+        )
+        let textBounds = textView.attributedText.boundingRect(
+            with: CGSize(
+                width: textWidth,
+                height: .greatestFiniteMagnitude
+            ),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            context: nil
+        )
+        fitted.size.height = max(1, ceil(textBounds.height) + 24)
+        return fitted
+    }
+
     func apply(
         attributedText: NSAttributedString,
         chunkIndex: Int,
         horizontalMargin: Double,
         accessibilityValue: String
     ) {
+        self.horizontalMargin = CGFloat(horizontalMargin)
         textView.textContainerInset = UIEdgeInsets(
             top: 12,
             left: horizontalMargin,

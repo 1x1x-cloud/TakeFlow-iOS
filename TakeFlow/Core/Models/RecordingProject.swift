@@ -3,6 +3,7 @@ import Foundation
 enum RecordingProjectStatus: String, Codable, CaseIterable, Sendable {
     case draft
     case recording
+    case needsRecovery
     case readyToExport
     case exporting
     case completed
