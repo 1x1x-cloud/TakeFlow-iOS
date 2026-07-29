@@ -204,7 +204,9 @@ final class TakeFlowUITests: XCTestCase {
         app.launch()
         createScriptAndOpenTeleprompter(
             app: app,
-            content: String(repeating: "用户拖动后继续滚动。\n", count: 20)
+            // 保证一次滑动仍位于正文中段，避免把“到达结尾”误判为
+            // “拖动后未继续”。这不会放宽恢复滚动的验收条件。
+            content: String(repeating: "用户拖动后继续滚动。\n", count: 100)
         )
 
         let primary = app.buttons["teleprompter.primary"]
