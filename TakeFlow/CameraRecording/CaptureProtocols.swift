@@ -1,26 +1,33 @@
 import Foundation
 
 protocol CaptureSessionServicing: Sendable {
-    func events() async -> AsyncStream<CaptureSessionEvent>
+    /// Returns an event stream scoped to one visible camera-page lifecycle.
+    /// Implementations must never deliver another lifecycle's events here.
+    func events(
+        for sessionID: UUID
+    ) async -> AsyncStream<CaptureSessionEvent>
     func configure(
+        sessionID: UUID,
         position: CameraPosition,
         preferredResolution: VideoResolution
     ) async throws
-    func startPreview() async throws
-    func stopPreview() async
-    func switchCamera() async throws
+    func startPreview(sessionID: UUID) async throws
+    func stopPreview(sessionID: UUID) async
+    func switchCamera(sessionID: UUID) async throws
     func startRecording(
+        sessionID: UUID,
         recordingID: UUID,
         outputURL: URL,
         rotationAngle: Double
     ) async throws
     func stopRecording(recordingID: UUID) async throws
     func setFocusAndExposure(
+        sessionID: UUID,
         at point: NormalizedCapturePoint,
         locked: Bool
     ) async throws
-    func handleApplicationBackgrounded() async
-    func handleApplicationForegrounded() async
+    func handleApplicationBackgrounded(sessionID: UUID) async
+    func handleApplicationForegrounded(sessionID: UUID) async
 }
 
 protocol RecordingFileStoring: Sendable {

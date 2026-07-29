@@ -7,6 +7,7 @@ struct CameraRecordingView: View {
     @StateObject private var recordingViewModel: CameraRecordingViewModel
     @StateObject private var teleprompterViewModel: TeleprompterViewModel
     @State private var showsLocalPreview = false
+    @State private var isClosing = false
 
     init(
         scriptID: UUID,
@@ -84,7 +85,9 @@ struct CameraRecordingView: View {
         }
         .onDisappear {
             teleprompterViewModel.viewDidDisappear()
-            recordingViewModel.viewDidDisappear()
+            Task {
+                await recordingViewModel.viewDidDisappear()
+            }
         }
         .sheet(isPresented: $showsLocalPreview) {
             localPreview
@@ -96,7 +99,7 @@ struct CameraRecordingView: View {
             if !recordingViewModel.state.isActivelyRecording {
                 Button(CameraRecordingStrings.retry) {
                     Task {
-                        await recordingViewModel.prepare()
+                        await recordingViewModel.retryPreparation()
                     }
                 }
             }
@@ -196,13 +199,21 @@ struct CameraRecordingView: View {
     private var topControls: some View {
         HStack(spacing: 12) {
             Button {
-                dismiss()
+                guard !isClosing else {
+                    return
+                }
+                isClosing = true
+                Task {
+                    await recordingViewModel.viewDidDisappear()
+                    dismiss()
+                }
             } label: {
                 Image(systemName: "xmark")
                     .frame(minWidth: 44, minHeight: 44)
             }
             .accessibilityLabel(CameraRecordingStrings.close)
             .accessibilityIdentifier("capture.close")
+            .disabled(isClosing)
 
             Spacer()
 
@@ -313,6 +324,16 @@ struct CameraRecordingView: View {
                 .padding(8)
                 .background(.black.opacity(0.65), in: Capsule())
                 .accessibilityIdentifier("capture.notice")
+        }
+
+        if recordingViewModel.canRetryPreparation {
+            Button(CameraRecordingStrings.retry) {
+                Task {
+                    await recordingViewModel.retryPreparation()
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("capture.retry")
         }
     }
 

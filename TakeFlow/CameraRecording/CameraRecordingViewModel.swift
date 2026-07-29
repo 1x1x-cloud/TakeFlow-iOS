@@ -26,9 +26,16 @@ final class CameraRecordingViewModel: ObservableObject {
     private var audioRouteTask: Task<Void, Never>?
     private var countdownTask: Task<Void, Never>?
     private var storageMonitorTask: Task<Void, Never>?
+    private var preparationTimeoutTask: Task<Void, Never>?
+    private var recordingFinalizationTimeoutTask: Task<Void, Never>?
+    private var recordingFinalizationWaiter:
+        CheckedContinuation<Void, Never>?
     private var callbackGeneration: UInt64 = 0
+    private var lifecycleGeneration: UInt64 = 0
+    private var activeSessionID: UUID?
     private var interruptionReason: CaptureInterruptionReason?
-    private var isVisible = true
+    private var isVisible = false
+    private var isShuttingDown = false
 
     init(
         scriptID: UUID,
@@ -43,6 +50,8 @@ final class CameraRecordingViewModel: ObservableObject {
         audioRouteTask?.cancel()
         countdownTask?.cancel()
         storageMonitorTask?.cancel()
+        preparationTimeoutTask?.cancel()
+        recordingFinalizationTimeoutTask?.cancel()
     }
 
     var canSwitchCamera: Bool {
@@ -53,6 +62,13 @@ final class CameraRecordingViewModel: ObservableObject {
         state == .ready
     }
 
+    var canRetryPreparation: Bool {
+        if case .failed = state {
+            return true
+        }
+        return false
+    }
+
 #if DEBUG
     var isFakePreview: Bool {
         dependencies.isUITestFake
@@ -60,12 +76,34 @@ final class CameraRecordingViewModel: ObservableObject {
 #endif
 
     func prepare() async {
+        if isVisible,
+           activeSessionID != nil,
+           (
+               state == .requestingPermissions
+                   || state == .configuring
+                   || state == .ready
+           ) {
+            return
+        }
+
         cancelTasksForNewLifecycle()
+        lifecycleGeneration &+= 1
+        let generation = lifecycleGeneration
+        let sessionID = UUID()
+        activeSessionID = sessionID
         errorMessage = nil
         noticeMessage = nil
         completedRecording = nil
         recoverableRecording = nil
+        previewSource = nil
+        configuration = nil
+        capabilities = .unavailable
         isVisible = true
+        isShuttingDown = false
+        schedulePreparationTimeout(
+            sessionID: sessionID,
+            generation: generation
+        )
 
         do {
             if state != .idle {
@@ -75,32 +113,64 @@ final class CameraRecordingViewModel: ObservableObject {
             try machine.beginPermissionRequest()
             synchronize()
             try await requirePermission(.camera)
+            try ensureCurrentLifecycle(sessionID, generation: generation)
             try await requirePermission(.microphone)
+            try ensureCurrentLifecycle(sessionID, generation: generation)
 
             try machine.beginConfiguration()
             synchronize()
-            startEventObservation()
+            await startEventObservation(
+                sessionID: sessionID,
+                generation: generation
+            )
             startAudioRouteObservation()
             try await dependencies.audio.activateForRecording()
+            try ensureCurrentLifecycle(sessionID, generation: generation)
             audioRoute = await dependencies.audio.currentInputRoute()
+            try ensureCurrentLifecycle(sessionID, generation: generation)
             guard audioRoute.isAvailable else {
                 throw CaptureError.microphoneUnavailable
             }
             try await dependencies.capture.configure(
+                sessionID: sessionID,
                 position: .front,
                 preferredResolution: selectedResolution
             )
-            try await dependencies.capture.startPreview()
+            try ensureCurrentLifecycle(sessionID, generation: generation)
+            try await dependencies.capture.startPreview(
+                sessionID: sessionID
+            )
+            try ensureCurrentLifecycle(sessionID, generation: generation)
             let recovered =
                 await dependencies.files.recoverPendingRecordings()
+            try ensureCurrentLifecycle(sessionID, generation: generation)
             if let latest = recovered.last {
                 recoverableRecording = latest
                 noticeMessage =
                     CameraRecordingStrings.recoveredRecordingFound
             }
+        } catch is CancellationError {
+            await cleanUpLifecycleIfCurrent(
+                sessionID: sessionID,
+                generation: generation,
+                keepFailureState: false
+            )
         } catch {
+            guard isCurrentLifecycle(sessionID, generation: generation) else {
+                return
+            }
             fail(error)
+            await cleanUpLifecycleIfCurrent(
+                sessionID: sessionID,
+                generation: generation,
+                keepFailureState: true
+            )
         }
+    }
+
+    func retryPreparation() async {
+        await viewDidDisappear()
+        await prepare()
     }
 
     func startRecording() {
@@ -152,12 +222,14 @@ final class CameraRecordingViewModel: ObservableObject {
     }
 
     func switchCamera() {
-        guard canSwitchCamera else {
+        guard canSwitchCamera, let sessionID = activeSessionID else {
             return
         }
         Task {
             do {
-                try await dependencies.capture.switchCamera()
+                try await dependencies.capture.switchCamera(
+                    sessionID: sessionID
+                )
             } catch {
                 errorMessage = (error as? LocalizedError)?.errorDescription
                     ?? CaptureError.cameraUnavailable.errorDescription
@@ -175,11 +247,18 @@ final class CameraRecordingViewModel: ObservableObject {
         else {
             return
         }
+        guard let sessionID = activeSessionID else {
+            return
+        }
         Task {
             do {
                 try await dependencies.capture.configure(
+                    sessionID: sessionID,
                     position: configuration?.position ?? .front,
                     preferredResolution: resolution
+                )
+                try await dependencies.capture.startPreview(
+                    sessionID: sessionID
                 )
             } catch {
                 errorMessage = (error as? LocalizedError)?.errorDescription
@@ -198,9 +277,13 @@ final class CameraRecordingViewModel: ObservableObject {
     func focus(
         at point: NormalizedCapturePoint
     ) {
+        guard let sessionID = activeSessionID else {
+            return
+        }
         Task {
             do {
                 try await dependencies.capture.setFocusAndExposure(
+                    sessionID: sessionID,
                     at: point,
                     locked: isFocusAndExposureLocked
                 )
@@ -242,25 +325,79 @@ final class CameraRecordingViewModel: ObservableObject {
         if case .starting = state {
             cancelCountdown()
         }
+        guard let sessionID = activeSessionID else {
+            return
+        }
         Task {
-            await dependencies.capture.handleApplicationBackgrounded()
+            await dependencies.capture.handleApplicationBackgrounded(
+                sessionID: sessionID
+            )
         }
     }
 
     func sceneDidBecomeActive() {
+        guard let sessionID = activeSessionID else {
+            return
+        }
         Task {
-            await dependencies.capture.handleApplicationForegrounded()
+            await dependencies.capture.handleApplicationForegrounded(
+                sessionID: sessionID
+            )
         }
     }
 
-    func viewDidDisappear() {
+    func viewDidDisappear() async {
+        guard isVisible || activeSessionID != nil else {
+            return
+        }
+        guard !isShuttingDown else {
+            return
+        }
+        isShuttingDown = true
         isVisible = false
+        lifecycleGeneration &+= 1
+        preparationTimeoutTask?.cancel()
         countdownTask?.cancel()
         storageMonitorTask?.cancel()
-        Task {
-            await dependencies.capture.stopPreview()
-            await dependencies.audio.deactivateAfterRecording()
+        audioRouteTask?.cancel()
+
+        if case .starting = state {
+            try? machine.cancelCountdown()
+            synchronize()
         }
+        if case .recording(let recordingID) = state {
+            do {
+                let shouldStop = try machine.beginStopping(
+                    recordingID: recordingID
+                )
+                synchronize()
+                if shouldStop {
+                    try await dependencies.capture.stopRecording(
+                        recordingID: recordingID
+                    )
+                }
+            } catch {
+                AppLogger.error(
+                    "recording_stop_on_camera_exit_failed",
+                    category: .recording
+                )
+            }
+        }
+
+        if let sessionID = activeSessionID {
+            await dependencies.capture.stopPreview(sessionID: sessionID)
+        }
+        if pendingRecording != nil {
+            await waitForRecordingFinalization()
+        }
+        eventTask?.cancel()
+        eventTask = nil
+        await dependencies.audio.deactivateAfterRecording()
+        activeSessionID = nil
+        previewSource = nil
+        configuration = nil
+        capabilities = .unavailable
+        isShuttingDown = false
     }
 
     func dismissError() {
@@ -269,9 +406,13 @@ final class CameraRecordingViewModel: ObservableObject {
 
     private func performCountdownAndStart() async {
         do {
+            guard let sessionID = activeSessionID else {
+                throw CaptureError.cameraUnavailable
+            }
             let capacity =
                 try await dependencies.storage
                     .availableCapacityForImportantUsage()
+            try Task.checkCancellation()
             guard capacity >= dependencies.storagePolicy.minimumStartBytes
             else {
                 throw CaptureError.storageSpaceInsufficient
@@ -306,8 +447,13 @@ final class CameraRecordingViewModel: ObservableObject {
             )
             pendingRecording = pending
             try await dependencies.files.markRecordingStarted(pending)
+            try Task.checkCancellation()
+            guard activeSessionID == sessionID else {
+                throw CancellationError()
+            }
             callbackGeneration = machine.generation
             try await dependencies.capture.startRecording(
+                sessionID: sessionID,
                 recordingID: pending.recordingID,
                 outputURL: pending.temporaryURL,
                 rotationAngle: captureRotationAngle
@@ -318,6 +464,13 @@ final class CameraRecordingViewModel: ObservableObject {
             synchronize()
             startStorageMonitor(recordingID: pending.recordingID)
         } catch is CancellationError {
+            if let pendingRecording,
+               !state.isActivelyRecording {
+                try? await dependencies.files.deleteProject(
+                    projectID: pendingRecording.projectID
+                )
+                self.pendingRecording = nil
+            }
             return
         } catch {
             if let pendingRecording {
@@ -330,15 +483,22 @@ final class CameraRecordingViewModel: ObservableObject {
         }
     }
 
-    private func startEventObservation() {
+    private func startEventObservation(
+        sessionID: UUID,
+        generation: UInt64
+    ) async {
         eventTask?.cancel()
-        eventTask = Task { [weak self, capture = dependencies.capture] in
-            let events = await capture.events()
+        let events = await dependencies.capture.events(for: sessionID)
+        eventTask = Task { [weak self] in
             for await event in events {
                 guard let self, !Task.isCancelled else {
                     return
                 }
-                await self.handle(event)
+                await self.handle(
+                    event,
+                    sessionID: sessionID,
+                    generation: generation
+                )
             }
         }
     }
@@ -367,8 +527,40 @@ final class CameraRecordingViewModel: ObservableObject {
         }
     }
 
-    private func handle(_ event: CaptureSessionEvent) async {
-        guard isVisible else {
+    private func handle(
+        _ event: CaptureSessionEvent,
+        sessionID: UUID,
+        generation: UInt64
+    ) async {
+        switch event {
+        case .recordingFinished(
+            let recordingID,
+            _,
+            let duration
+        ):
+            await handleRecordingFinished(
+                recordingID: recordingID,
+                duration: duration
+            )
+            return
+        case .recordingFailed(
+            let recordingID,
+            _,
+            let error
+        ):
+            await preserveAfterFailure(
+                recordingID: recordingID,
+                reason: interruptionReason ?? .unknown
+            )
+            resumeRecordingFinalizationWaiter()
+            if isCurrentLifecycle(sessionID, generation: generation) {
+                fail(error)
+            }
+            return
+        default:
+            break
+        }
+        guard isCurrentLifecycle(sessionID, generation: generation) else {
             return
         }
         switch event {
@@ -381,6 +573,8 @@ final class CameraRecordingViewModel: ObservableObject {
             self.configuration = configuration
             self.capabilities = capabilities
             selectedResolution = configuration.format.resolution
+            preparationTimeoutTask?.cancel()
+            preparationTimeoutTask = nil
             if state == .configuring {
                 do {
                     try machine.markReady()
@@ -396,25 +590,8 @@ final class CameraRecordingViewModel: ObservableObject {
                 return
             }
             recordingDuration = seconds
-        case .recordingFinished(
-            let recordingID,
-            _,
-            let duration
-        ):
-            await handleRecordingFinished(
-                recordingID: recordingID,
-                duration: duration
-            )
-        case .recordingFailed(
-            let recordingID,
-            _,
-            let error
-        ):
-            await preserveAfterFailure(
-                recordingID: recordingID,
-                reason: interruptionReason ?? .unknown
-            )
-            fail(error)
+        case .recordingFinished, .recordingFailed:
+            break
         case .interrupted(
             let recordingID,
             let reason,
@@ -443,6 +620,9 @@ final class CameraRecordingViewModel: ObservableObject {
         recordingID: UUID,
         duration: TimeInterval
     ) async {
+        defer {
+            resumeRecordingFinalizationWaiter()
+        }
         guard
             let pending = pendingRecording,
             pending.recordingID == recordingID
@@ -505,6 +685,42 @@ final class CameraRecordingViewModel: ObservableObject {
                 category: .persistence
             )
         }
+    }
+
+    private func waitForRecordingFinalization() async {
+        guard pendingRecording != nil else {
+            return
+        }
+        recordingFinalizationTimeoutTask?.cancel()
+        await withCheckedContinuation { continuation in
+            recordingFinalizationWaiter = continuation
+            recordingFinalizationTimeoutTask = Task { [weak self] in
+                do {
+                    try await Task.sleep(for: .seconds(8))
+                } catch {
+                    return
+                }
+                await self?.recordingFinalizationDidTimeOut()
+            }
+        }
+    }
+
+    private func recordingFinalizationDidTimeOut() async {
+        if let recordingID = pendingRecording?.recordingID {
+            await preserveAfterFailure(
+                recordingID: recordingID,
+                reason: .unknown
+            )
+        }
+        resumeRecordingFinalizationWaiter()
+    }
+
+    private func resumeRecordingFinalizationWaiter() {
+        recordingFinalizationTimeoutTask?.cancel()
+        recordingFinalizationTimeoutTask = nil
+        let waiter = recordingFinalizationWaiter
+        recordingFinalizationWaiter = nil
+        waiter?.resume()
     }
 
     private func startStorageMonitor(recordingID: UUID) {
@@ -597,6 +813,92 @@ final class CameraRecordingViewModel: ObservableObject {
         storageMonitorTask?.cancel()
         eventTask?.cancel()
         audioRouteTask?.cancel()
+        preparationTimeoutTask?.cancel()
+    }
+
+    private func schedulePreparationTimeout(
+        sessionID: UUID,
+        generation: UInt64
+    ) {
+        preparationTimeoutTask?.cancel()
+        preparationTimeoutTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+            do {
+                try await Task.sleep(
+                    for: dependencies.preparationTimeout
+                )
+            } catch {
+                return
+            }
+            await self.handlePreparationTimeout(
+                sessionID: sessionID,
+                generation: generation
+            )
+        }
+    }
+
+    private func handlePreparationTimeout(
+        sessionID: UUID,
+        generation: UInt64
+    ) async {
+        guard
+            isCurrentLifecycle(sessionID, generation: generation),
+            state == .requestingPermissions || state == .configuring
+        else {
+            return
+        }
+        fail(CaptureError.preparationTimedOut)
+        await cleanUpLifecycleIfCurrent(
+            sessionID: sessionID,
+            generation: generation,
+            keepFailureState: true
+        )
+    }
+
+    private func cleanUpLifecycleIfCurrent(
+        sessionID: UUID,
+        generation: UInt64,
+        keepFailureState: Bool
+    ) async {
+        guard isCurrentLifecycle(sessionID, generation: generation) else {
+            return
+        }
+        isVisible = false
+        preparationTimeoutTask?.cancel()
+        preparationTimeoutTask = nil
+        audioRouteTask?.cancel()
+        await dependencies.capture.stopPreview(sessionID: sessionID)
+        eventTask?.cancel()
+        await dependencies.audio.deactivateAfterRecording()
+        activeSessionID = nil
+        previewSource = nil
+        configuration = nil
+        capabilities = .unavailable
+        if !keepFailureState {
+            machine.reset()
+            synchronize()
+        }
+    }
+
+    private func ensureCurrentLifecycle(
+        _ sessionID: UUID,
+        generation: UInt64
+    ) throws {
+        guard isCurrentLifecycle(sessionID, generation: generation) else {
+            throw CancellationError()
+        }
+        try Task.checkCancellation()
+    }
+
+    private func isCurrentLifecycle(
+        _ sessionID: UUID,
+        generation: UInt64
+    ) -> Bool {
+        isVisible
+            && activeSessionID == sessionID
+            && lifecycleGeneration == generation
     }
 
     private static func orientation(

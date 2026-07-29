@@ -10,26 +10,24 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
         label: "com.example.takeflow.capture-session",
         qos: .userInitiated
     )
-    private let eventStream: AsyncStream<CaptureSessionEvent>
-    private let eventContinuation: AsyncStream<CaptureSessionEvent>.Continuation
 
     private var videoInput: AVCaptureDeviceInput?
     private var audioInput: AVCaptureDeviceInput?
     private var currentConfiguration: CaptureConfiguration?
     private var currentCapabilities: CaptureCapabilities = .unavailable
-    private var activeRecordings: [URL: UUID] = [:]
+    private var activeSessionID: UUID?
+    private var eventContinuations:
+        [UUID: AsyncStream<CaptureSessionEvent>.Continuation] = [:]
+    private var activeRecordings:
+        [URL: (recordingID: UUID, sessionID: UUID)] = [:]
     private var activeRecordingID: UUID?
+    private var stoppingRecordingID: UUID?
     private var durationTimer: DispatchSourceTimer?
     private var notificationTokens: [NSObjectProtocol] = []
     private var shouldStopSessionAfterRecording = false
     private var interruptionWasIssued = false
 
     override init() {
-        let pair = AsyncStream<CaptureSessionEvent>.makeStream(
-            bufferingPolicy: .bufferingNewest(32)
-        )
-        eventStream = pair.stream
-        eventContinuation = pair.continuation
         super.init()
         installNotifications()
     }
@@ -39,18 +37,49 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
         notificationTokens.forEach(
             NotificationCenter.default.removeObserver
         )
-        eventContinuation.finish()
+        eventContinuations.values.forEach { $0.finish() }
     }
 
-    func events() async -> AsyncStream<CaptureSessionEvent> {
-        eventStream
+    func events(
+        for sessionID: UUID
+    ) async -> AsyncStream<CaptureSessionEvent> {
+        let pair = AsyncStream<CaptureSessionEvent>.makeStream(
+            bufferingPolicy: .bufferingNewest(32)
+        )
+        pair.continuation.onTermination = { [weak self] _ in
+            guard let captureService = self else {
+                return
+            }
+            captureService.sessionQueue.async { [weak captureService] in
+                captureService?.removeEventContinuation(for: sessionID)
+            }
+        }
+        await runOnSessionQueueWithoutThrowing {
+            self.eventContinuations.removeValue(forKey: sessionID)?.finish()
+            self.eventContinuations[sessionID] = pair.continuation
+        }
+        return pair.stream
     }
 
     func configure(
+        sessionID: UUID,
         position: CameraPosition,
         preferredResolution: VideoResolution
     ) async throws {
         try await runOnSessionQueue {
+            guard self.activeRecordingID == nil else {
+                throw CaptureError.alreadyRecording
+            }
+            if self.activeSessionID != sessionID {
+                if let previousSessionID = self.activeSessionID {
+                    self.finishEvents(for: previousSessionID)
+                }
+                if self.session.isRunning {
+                    self.session.stopRunning()
+                }
+                self.activeSessionID = sessionID
+                self.interruptionWasIssued = false
+            }
             try self.configureLocked(
                 position: position,
                 preferredResolution: preferredResolution
@@ -58,31 +87,66 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
         }
     }
 
-    func startPreview() async throws {
+    func startPreview(sessionID: UUID) async throws {
         try await runOnSessionQueue {
-            guard self.currentConfiguration != nil else {
-                throw CaptureError.cameraUnavailable
+            guard
+                self.activeSessionID == sessionID,
+                let configuration = self.currentConfiguration,
+                let device = self.videoInput?.device
+            else {
+                throw CaptureError.staleCallback
             }
             if !self.session.isRunning {
                 self.session.startRunning()
             }
+            self.yield(
+                .sessionReady(
+                    source: CapturePreviewSource(
+                        session: self.session,
+                        device: device
+                    ),
+                    configuration: configuration,
+                    capabilities: self.currentCapabilities
+                ),
+                to: sessionID
+            )
         }
     }
 
-    func stopPreview() async {
+    func stopPreview(sessionID: UUID) async {
         await runOnSessionQueueWithoutThrowing {
+            guard self.activeSessionID == sessionID else {
+                self.finishEvents(for: sessionID)
+                return
+            }
             guard self.activeRecordingID == nil else {
                 self.shouldStopSessionAfterRecording = true
+                if
+                    self.stoppingRecordingID != self.activeRecordingID,
+                    self.movieOutput.isRecording
+                {
+                    self.stoppingRecordingID = self.activeRecordingID
+                    self.movieOutput.stopRecording()
+                }
                 return
             }
             if self.session.isRunning {
                 self.session.stopRunning()
             }
+            self.activeSessionID = nil
+            self.currentConfiguration = nil
+            self.currentCapabilities = .unavailable
+            self.videoInput = nil
+            self.audioInput = nil
+            self.finishEvents(for: sessionID)
         }
     }
 
-    func switchCamera() async throws {
+    func switchCamera(sessionID: UUID) async throws {
         try await runOnSessionQueue {
+            guard self.activeSessionID == sessionID else {
+                throw CaptureError.staleCallback
+            }
             guard self.activeRecordingID == nil else {
                 throw CaptureError.cameraSwitchDuringRecording
             }
@@ -98,16 +162,35 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
             if !self.session.isRunning {
                 self.session.startRunning()
             }
+            guard
+                let updatedConfiguration = self.currentConfiguration,
+                let device = self.videoInput?.device
+            else {
+                throw CaptureError.cameraUnavailable
+            }
+            self.yield(
+                .sessionReady(
+                    source: CapturePreviewSource(
+                        session: self.session,
+                        device: device
+                    ),
+                    configuration: updatedConfiguration,
+                    capabilities: self.currentCapabilities
+                ),
+                to: sessionID
+            )
         }
     }
 
     func startRecording(
+        sessionID: UUID,
         recordingID: UUID,
         outputURL: URL,
         rotationAngle: Double
     ) async throws {
         try await runOnSessionQueue {
             guard
+                self.activeSessionID == sessionID,
                 self.activeRecordingID == nil,
                 let configuration = self.currentConfiguration,
                 self.session.isRunning
@@ -151,9 +234,13 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
             )
             let standardizedURL = outputURL.standardizedFileURL
             self.activeRecordingID = recordingID
-            self.activeRecordings[standardizedURL] = recordingID
+            self.activeRecordings[standardizedURL] = (
+                recordingID: recordingID,
+                sessionID: sessionID
+            )
             self.interruptionWasIssued = false
             self.shouldStopSessionAfterRecording = false
+            self.stoppingRecordingID = nil
             self.movieOutput.startRecording(
                 to: standardizedURL,
                 recordingDelegate: self
@@ -170,18 +257,26 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
             guard activeID == recordingID else {
                 throw CaptureError.staleCallback
             }
+            if self.stoppingRecordingID == recordingID {
+                return
+            }
             guard self.movieOutput.isRecording else {
                 throw CaptureError.notRecording
             }
+            self.stoppingRecordingID = recordingID
             self.movieOutput.stopRecording()
         }
     }
 
     func setFocusAndExposure(
+        sessionID: UUID,
         at point: NormalizedCapturePoint,
         locked: Bool
     ) async throws {
         try await runOnSessionQueue {
+            guard self.activeSessionID == sessionID else {
+                throw CaptureError.staleCallback
+            }
             guard let device = self.videoInput?.device else {
                 throw CaptureError.cameraUnavailable
             }
@@ -219,15 +314,23 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
         }
     }
 
-    func handleApplicationBackgrounded() async {
+    func handleApplicationBackgrounded(sessionID: UUID) async {
         await runOnSessionQueueWithoutThrowing {
+            guard self.activeSessionID == sessionID else {
+                return
+            }
             self.interruptLocked(reason: .applicationBackgrounded)
         }
     }
 
-    func handleApplicationForegrounded() async {
-        // Deliberately does not restart the session or recording. The user must
-        // explicitly reconfigure/preview and start a new recording.
+    func handleApplicationForegrounded(sessionID: UUID) async {
+        await runOnSessionQueueWithoutThrowing {
+            guard self.activeSessionID == sessionID else {
+                return
+            }
+            // Deliberately does not restart the session or recording. The user
+            // must explicitly reconfigure and start a new recording.
+        }
     }
 
     private func configureLocked(
@@ -321,16 +424,6 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
         audioInput = newAudioInput
         currentConfiguration = configuration
         currentCapabilities = capabilities
-        eventContinuation.yield(
-            .sessionReady(
-                source: CapturePreviewSource(
-                    session: session,
-                    device: device
-                ),
-                configuration: configuration,
-                capabilities: capabilities
-            )
-        )
     }
 
     private func makeCapabilities(
@@ -433,8 +526,11 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
             }
             let seconds = CMTimeGetSeconds(self.movieOutput.recordedDuration)
             if seconds.isFinite {
-                self.eventContinuation.yield(
-                    .duration(recordingID: recordingID, seconds: seconds)
+                self.yieldToActiveSession(
+                    .duration(
+                        recordingID: recordingID,
+                        seconds: seconds
+                    )
                 )
             }
         }
@@ -477,7 +573,7 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
                 }
                 captureService.sessionQueue.async {
                     if isMediaServicesReset {
-                        captureService.eventContinuation.yield(
+                        captureService.yieldToActiveSession(
                             .mediaServicesReset
                         )
                         captureService.interruptLocked(
@@ -498,9 +594,9 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
         interruptionWasIssued = true
         if let recordingID = activeRecordingID {
             let outputURL = activeRecordings.first {
-                $0.value == recordingID
+                $0.value.recordingID == recordingID
             }?.key
-            eventContinuation.yield(
+            yieldToActiveSession(
                 .interrupted(
                     recordingID: recordingID,
                     reason: reason,
@@ -508,11 +604,15 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
                 )
             )
             shouldStopSessionAfterRecording = true
-            if movieOutput.isRecording {
+            if
+                stoppingRecordingID != recordingID,
+                movieOutput.isRecording
+            {
+                stoppingRecordingID = recordingID
                 movieOutput.stopRecording()
             }
         } else {
-            eventContinuation.yield(
+            yieldToActiveSession(
                 .interrupted(
                     recordingID: nil,
                     reason: reason,
@@ -523,6 +623,28 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
                 session.stopRunning()
             }
         }
+    }
+
+    private func yieldToActiveSession(_ event: CaptureSessionEvent) {
+        guard let activeSessionID else {
+            return
+        }
+        yield(event, to: activeSessionID)
+    }
+
+    private func yield(
+        _ event: CaptureSessionEvent,
+        to sessionID: UUID
+    ) {
+        eventContinuations[sessionID]?.yield(event)
+    }
+
+    private func finishEvents(for sessionID: UUID) {
+        eventContinuations.removeValue(forKey: sessionID)?.finish()
+    }
+
+    private func removeEventContinuation(for sessionID: UUID) {
+        eventContinuations.removeValue(forKey: sessionID)
     }
 
     private func runOnSessionQueue<T: Sendable>(
@@ -594,16 +716,18 @@ extension AVFoundationCaptureService: AVCaptureFileOutputRecordingDelegate {
         sessionQueue.async {
             let standardizedURL = outputFileURL.standardizedFileURL
             guard
-                let recordingID = self.activeRecordings.removeValue(
+                let recordingContext = self.activeRecordings.removeValue(
                     forKey: standardizedURL
                 )
             else {
                 return
             }
+            let recordingID = recordingContext.recordingID
             let duration = CMTimeGetSeconds(output.recordedDuration)
             self.durationTimer?.cancel()
             self.durationTimer = nil
             self.activeRecordingID = nil
+            self.stoppingRecordingID = nil
 
             let wasSuccessful: Bool
             if let error = error as NSError? {
@@ -616,25 +740,37 @@ extension AVFoundationCaptureService: AVCaptureFileOutputRecordingDelegate {
             }
 
             if wasSuccessful {
-                self.eventContinuation.yield(
+                self.yield(
                     .recordingFinished(
                         recordingID: recordingID,
                         outputURL: standardizedURL,
                         duration: duration.isFinite ? max(duration, 0) : 0
-                    )
+                    ),
+                    to: recordingContext.sessionID
                 )
             } else {
-                self.eventContinuation.yield(
+                self.yield(
                     .recordingFailed(
                         recordingID: recordingID,
                         outputURL: standardizedURL,
                         error: .recordingFailed
-                    )
+                    ),
+                    to: recordingContext.sessionID
                 )
             }
 
-            if self.shouldStopSessionAfterRecording, self.session.isRunning {
-                self.session.stopRunning()
+            if self.shouldStopSessionAfterRecording {
+                if self.session.isRunning {
+                    self.session.stopRunning()
+                }
+                if self.activeSessionID == recordingContext.sessionID {
+                    self.activeSessionID = nil
+                    self.currentConfiguration = nil
+                    self.currentCapabilities = .unavailable
+                    self.videoInput = nil
+                    self.audioInput = nil
+                }
+                self.finishEvents(for: recordingContext.sessionID)
             }
             self.shouldStopSessionAfterRecording = false
         }

@@ -11,6 +11,7 @@ struct CameraRecordingDependencies {
     let storagePolicy: RecordingStoragePolicy
     let countdownSeconds: Int
     let countdownStep: Duration
+    let preparationTimeout: Duration
 #if DEBUG
     let isUITestFake: Bool
 #endif
@@ -27,6 +28,7 @@ struct CameraRecordingDependencies {
             storagePolicy: .production,
             countdownSeconds: 3,
             countdownStep: .seconds(1),
+            preparationTimeout: .seconds(12),
             isUITestFake: false
         )
 #else
@@ -39,7 +41,8 @@ struct CameraRecordingDependencies {
             audio: SystemAudioSessionService(),
             storagePolicy: .production,
             countdownSeconds: 3,
-            countdownStep: .seconds(1)
+            countdownStep: .seconds(1),
+            preparationTimeout: .seconds(12)
         )
 #endif
     }
@@ -71,6 +74,9 @@ struct CameraRecordingDependencies {
             ),
             countdownSeconds: 3,
             countdownStep: .seconds(1),
+            preparationTimeout:
+                mode == .preparationTimesOutOnce
+                ? .milliseconds(250) : .seconds(12),
             isUITestFake: true
         )
     }
@@ -88,6 +94,7 @@ struct CameraRecordingDependencies {
             storagePolicy: .production,
             countdownSeconds: 3,
             countdownStep: .seconds(1),
+            preparationTimeout: .seconds(12),
             isUITestFake: false
         )
 #else
@@ -100,7 +107,8 @@ struct CameraRecordingDependencies {
             audio: UnavailableAudioSessionService(),
             storagePolicy: .production,
             countdownSeconds: 3,
-            countdownStep: .seconds(1)
+            countdownStep: .seconds(1),
+            preparationTimeout: .seconds(12)
         )
 #endif
     }
@@ -113,9 +121,12 @@ enum FakeCaptureMode: Equatable, Sendable {
     case microphoneDenied
     case interrupted
     case lowStorage
+    case preparationTimesOutOnce
 
     init(arguments: [String]) {
-        if arguments.contains("-ui-testing-camera-denied") {
+        if arguments.contains("-ui-testing-capture-timeout-once") {
+            self = .preparationTimesOutOnce
+        } else if arguments.contains("-ui-testing-camera-denied") {
             self = .cameraDenied
         } else if arguments.contains("-ui-testing-microphone-denied") {
             self = .microphoneDenied
@@ -155,29 +166,42 @@ final class FakePermissionService: PermissionAuthorizing {
 
 actor FakeCaptureSessionService: CaptureSessionServicing {
     private let mode: FakeCaptureMode
-    private let stream: AsyncStream<CaptureSessionEvent>
-    private let continuation: AsyncStream<CaptureSessionEvent>.Continuation
+    private var continuations:
+        [UUID: AsyncStream<CaptureSessionEvent>.Continuation] = [:]
+    private var activeSessionID: UUID?
     private var configuration: CaptureConfiguration?
-    private var activeRecording: (id: UUID, url: URL)?
+    private var activeRecording: (id: UUID, url: URL, sessionID: UUID)?
     private var lockedRotationAngle: Double?
+    private var previewStartCount = 0
 
     init(mode: FakeCaptureMode) {
         self.mode = mode
+    }
+
+    func events(
+        for sessionID: UUID
+    ) async -> AsyncStream<CaptureSessionEvent> {
         let pair = AsyncStream<CaptureSessionEvent>.makeStream(
             bufferingPolicy: .bufferingNewest(32)
         )
-        stream = pair.stream
-        continuation = pair.continuation
-    }
-
-    func events() async -> AsyncStream<CaptureSessionEvent> {
-        stream
+        continuations.removeValue(forKey: sessionID)?.finish()
+        continuations[sessionID] = pair.continuation
+        return pair.stream
     }
 
     func configure(
+        sessionID: UUID,
         position: CameraPosition,
         preferredResolution: VideoResolution
     ) async throws {
+        guard activeRecording == nil else {
+            throw CaptureError.alreadyRecording
+        }
+        if let previousSessionID = activeSessionID,
+           previousSessionID != sessionID {
+            continuations.removeValue(forKey: previousSessionID)?.finish()
+        }
+        activeSessionID = sessionID
         let format = CaptureFormatOption(
             resolution: preferredResolution,
             framesPerSecond: 30,
@@ -191,7 +215,23 @@ actor FakeCaptureSessionService: CaptureSessionServicing {
             outputMirrored: false
         )
         self.configuration = configuration
-        continuation.yield(
+    }
+
+    func startPreview(sessionID: UUID) async throws {
+        guard
+            activeSessionID == sessionID,
+            let configuration
+        else {
+            throw CaptureError.staleCallback
+        }
+        previewStartCount += 1
+        if
+            mode == .preparationTimesOutOnce,
+            previewStartCount == 1
+        {
+            return
+        }
+        continuations[sessionID]?.yield(
             .sessionReady(
                 source: nil,
                 configuration: configuration,
@@ -218,17 +258,30 @@ actor FakeCaptureSessionService: CaptureSessionServicing {
         )
     }
 
-    func startPreview() async throws {}
+    func stopPreview(sessionID: UUID) async {
+        guard activeSessionID == sessionID else {
+            continuations.removeValue(forKey: sessionID)?.finish()
+            return
+        }
+        if activeRecording != nil {
+            return
+        }
+        activeSessionID = nil
+        configuration = nil
+        continuations.removeValue(forKey: sessionID)?.finish()
+    }
 
-    func stopPreview() async {}
-
-    func switchCamera() async throws {
+    func switchCamera(sessionID: UUID) async throws {
+        guard activeSessionID == sessionID else {
+            throw CaptureError.staleCallback
+        }
         guard activeRecording == nil else {
             throw CaptureError.cameraSwitchDuringRecording
         }
         let next: CameraPosition =
             configuration?.position == .front ? .back : .front
         try await configure(
+            sessionID: sessionID,
             position: next,
             preferredResolution:
                 configuration?.format.resolution ?? .fullHD1080p
@@ -236,10 +289,14 @@ actor FakeCaptureSessionService: CaptureSessionServicing {
     }
 
     func startRecording(
+        sessionID: UUID,
         recordingID: UUID,
         outputURL: URL,
         rotationAngle: Double
     ) async throws {
+        guard activeSessionID == sessionID else {
+            throw CaptureError.staleCallback
+        }
         guard activeRecording == nil else {
             throw CaptureError.alreadyRecording
         }
@@ -247,9 +304,11 @@ actor FakeCaptureSessionService: CaptureSessionServicing {
             to: outputURL,
             options: .atomic
         )
-        activeRecording = (recordingID, outputURL)
+        activeRecording = (recordingID, outputURL, sessionID)
         lockedRotationAngle = rotationAngle
-        continuation.yield(.duration(recordingID: recordingID, seconds: 0))
+        continuations[sessionID]?.yield(
+            .duration(recordingID: recordingID, seconds: 0)
+        )
 
         if mode == .interrupted {
             Task {
@@ -267,7 +326,7 @@ actor FakeCaptureSessionService: CaptureSessionServicing {
             throw CaptureError.staleCallback
         }
         self.activeRecording = nil
-        continuation.yield(
+        continuations[activeRecording.sessionID]?.yield(
             .recordingFinished(
                 recordingID: recordingID,
                 outputURL: activeRecording.url,
@@ -277,23 +336,31 @@ actor FakeCaptureSessionService: CaptureSessionServicing {
     }
 
     func setFocusAndExposure(
+        sessionID: UUID,
         at point: NormalizedCapturePoint,
         locked: Bool
-    ) async throws {}
+    ) async throws {
+        guard activeSessionID == sessionID else {
+            throw CaptureError.staleCallback
+        }
+    }
 
-    func handleApplicationBackgrounded() async {
+    func handleApplicationBackgrounded(sessionID: UUID) async {
+        guard activeSessionID == sessionID else {
+            return
+        }
         guard let activeRecording else {
             return
         }
         self.activeRecording = nil
-        continuation.yield(
+        continuations[sessionID]?.yield(
             .interrupted(
                 recordingID: activeRecording.id,
                 reason: .applicationBackgrounded,
                 outputURL: activeRecording.url
             )
         )
-        continuation.yield(
+        continuations[sessionID]?.yield(
             .recordingFinished(
                 recordingID: activeRecording.id,
                 outputURL: activeRecording.url,
@@ -302,7 +369,7 @@ actor FakeCaptureSessionService: CaptureSessionServicing {
         )
     }
 
-    func handleApplicationForegrounded() async {}
+    func handleApplicationForegrounded(sessionID: UUID) async {}
 
     func capturedRotationAngleForTesting() -> Double? {
         lockedRotationAngle
@@ -313,14 +380,14 @@ actor FakeCaptureSessionService: CaptureSessionServicing {
             return
         }
         self.activeRecording = nil
-        continuation.yield(
+        continuations[activeRecording.sessionID]?.yield(
             .interrupted(
                 recordingID: recordingID,
                 reason: .cameraUnavailable,
                 outputURL: activeRecording.url
             )
         )
-        continuation.yield(
+        continuations[activeRecording.sessionID]?.yield(
             .recordingFinished(
                 recordingID: recordingID,
                 outputURL: activeRecording.url,
@@ -383,28 +450,32 @@ private final class UnavailableCapturePermissionService:
 }
 
 private actor UnavailableCaptureSessionService: CaptureSessionServicing {
-    func events() async -> AsyncStream<CaptureSessionEvent> {
+    func events(
+        for sessionID: UUID
+    ) async -> AsyncStream<CaptureSessionEvent> {
         AsyncStream { $0.finish() }
     }
 
     func configure(
+        sessionID: UUID,
         position: CameraPosition,
         preferredResolution: VideoResolution
     ) async throws {
         throw CaptureError.cameraUnavailable
     }
 
-    func startPreview() async throws {
+    func startPreview(sessionID: UUID) async throws {
         throw CaptureError.cameraUnavailable
     }
 
-    func stopPreview() async {}
+    func stopPreview(sessionID: UUID) async {}
 
-    func switchCamera() async throws {
+    func switchCamera(sessionID: UUID) async throws {
         throw CaptureError.cameraUnavailable
     }
 
     func startRecording(
+        sessionID: UUID,
         recordingID: UUID,
         outputURL: URL,
         rotationAngle: Double
@@ -417,15 +488,16 @@ private actor UnavailableCaptureSessionService: CaptureSessionServicing {
     }
 
     func setFocusAndExposure(
+        sessionID: UUID,
         at point: NormalizedCapturePoint,
         locked: Bool
     ) async throws {
         throw CaptureError.cameraUnavailable
     }
 
-    func handleApplicationBackgrounded() async {}
+    func handleApplicationBackgrounded(sessionID: UUID) async {}
 
-    func handleApplicationForegrounded() async {}
+    func handleApplicationForegrounded(sessionID: UUID) async {}
 }
 
 private struct UnavailableRecordingFileStore: RecordingFileStoring {

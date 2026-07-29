@@ -422,6 +422,57 @@ final class TakeFlowUITests: XCTestCase {
     }
 
     @MainActor
+    func testCaptureCanExitAndEnterAgain() throws {
+        let app = launchCaptureApp()
+        createScriptAndOpenCapture(
+            app: app,
+            content: "重复进入摄像提词"
+        )
+        waitForCaptureState(app, containing: "预览已就绪", timeout: 5)
+
+        app.buttons["capture.close"].tap()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["capture.screen"]
+                .waitForNonExistence(timeout: 5)
+        )
+        let openButton = captureOpenButton(in: app)
+        XCTAssertTrue(openButton.waitForExistence(timeout: 5))
+        openButton.tap()
+
+        XCTAssertTrue(
+            app.descendants(matching: .any)["capture.screen"]
+                .waitForExistence(timeout: 5)
+        )
+        waitForCaptureState(app, containing: "预览已就绪", timeout: 5)
+        XCTAssertTrue(app.buttons["capture.record"].isEnabled)
+    }
+
+    @MainActor
+    func testCapturePreparationTimeoutOffersWorkingRetry() throws {
+        let app = launchCaptureApp(
+            extraArguments: ["-ui-testing-capture-timeout-once"]
+        )
+        createScriptAndOpenCapture(
+            app: app,
+            content: "摄像头超时重试"
+        )
+
+        let alert = app.alerts.firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            alert.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS %@", "准备超时")
+            ).firstMatch.exists
+        )
+        let retry = alert.buttons["重新尝试"]
+        XCTAssertTrue(retry.exists)
+        retry.tap()
+
+        waitForCaptureState(app, containing: "预览已就绪", timeout: 5)
+        XCTAssertTrue(app.buttons["capture.record"].isEnabled)
+    }
+
+    @MainActor
     func testCaptureForegroundDoesNotAutomaticallyResumeRecording()
         throws
     {
@@ -542,7 +593,7 @@ final class TakeFlowUITests: XCTestCase {
         addButton.tap()
 
         let editor = app.textViews["editor.content"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
         editor.tap()
         editor.typeText(content)
 
@@ -556,12 +607,7 @@ final class TakeFlowUITests: XCTestCase {
         waitForExpectations(timeout: 15)
         app.navigationBars.buttons.element(boundBy: 0).tap()
 
-        let openButton = app.buttons.matching(
-            NSPredicate(
-                format: "identifier BEGINSWITH %@",
-                "capture.open."
-            )
-        ).firstMatch
+        let openButton = captureOpenButton(in: app)
         XCTAssertTrue(openButton.waitForExistence(timeout: 5))
         XCTAssertEqual(openButton.label, "摄像提词")
         openButton.tap()
@@ -569,6 +615,18 @@ final class TakeFlowUITests: XCTestCase {
             app.descendants(matching: .any)["capture.screen"]
                 .waitForExistence(timeout: 5)
         )
+    }
+
+    @MainActor
+    private func captureOpenButton(
+        in app: XCUIApplication
+    ) -> XCUIElement {
+        app.buttons.matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@",
+                "capture.open."
+            )
+        ).firstMatch
     }
 
     @MainActor

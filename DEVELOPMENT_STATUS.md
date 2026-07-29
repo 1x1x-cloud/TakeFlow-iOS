@@ -3,7 +3,7 @@
 最后更新：2026-07-29
 产品规格：`PRODUCT_SPEC.md` 1.0
 总体状态：进行中
-当前阶段：模块 0 已完成；模块 1、模块 2、模块 3 的实现、模拟器构建和自动化验收已通过，真机验收待执行；模块 3 的真实摄像头、麦克风、方向、镜像、蓝牙、相册、长录制与中断恢复仍必须在设备上验证
+当前阶段：模块 0 已完成；模块 1、模块 2、模块 3 的实现、模拟器构建和自动化验收已通过；模块 3 的摄像头重复进入缺陷已完成软件加固，并通过 M3-16 连续 10 轮真实 iPhone 复测，但方向、镜像、蓝牙、相册、长录制与系统中断恢复等其余真机验收仍待执行
 
 ## 状态定义
 
@@ -19,7 +19,7 @@
 | 0 | 工程初始化与规则建立 | 已完成 | iPhone、iPad 模拟器构建通过 | 5 通过、0 失败 | 模拟器启动通过；正式签名、真机与 TestFlight 未验证 | `TakeFlow` App、单测、UI 测试三个 Target 已建立；发布前手动项见 M0-01 至 M0-06 |
 | 1 | 稿件管理与编辑 | 进行中 | iPhone、iPad 模拟器 Debug 构建通过 | 单元测试 33/33；UI 测试 4/4 | M1-01 至 M1-07 待执行 | SwiftData 本地持久化、V1 Schema 与独立恢复草稿已落地；状态保留为“进行中”，直到真机强杀恢复、输入、性能、离线和低存储验收完成 |
 | 2 | 基础提词器 | 进行中 | iPhone、iPad 模拟器 Debug 构建通过 | 单元测试 74/74；UI 测试 9/9（含模块 1 全量回归） | M2-01 至 M2-10 待执行 | 固定速度、唯一状态机、全局 Character 锚点、每稿偏好及有界分块虚拟化已实现；模拟器 1 万/10 万字符内部阈值通过，真机滚动、辅助功能及长稿性能未验收 |
-| 3 | 摄像头与视频录制 | 进行中 | iPhone、iPad 模拟器 Debug、Generic iOS Device 无签名 Debug、Generic iOS Device 无签名 Release 构建通过 | 单元测试 131/131；UI 测试 17/17（含模块 1、2 全量回归）；模块 2 性能测试冷启动后连续三轮通过 | M3-01 至 M3-15 待执行 | 显式录制状态机、AVFoundation 串行服务、动态能力矩阵、私有录制文件恢复、低空间保护、Debug-only Fake UI 流程和提词器叠加已实现；本地提交只代表软件与模拟器基线，不能替代真实硬件验收 |
+| 3 | 摄像头与视频录制 | 进行中 | iPhone、iPad 模拟器 Debug、Generic iOS Device 无签名 Debug、Generic iOS Device 无签名 Release 构建通过 | 单元测试 139/139；UI 测试 19/19（含模块 1、2 全量回归）；模块 2 性能阈值继续通过 | M3-16 通过；M3-01 至 M3-15 待执行 | 显式录制状态机、AVFoundation 串行服务、动态能力矩阵、私有录制文件恢复、低空间保护、Debug-only Fake UI 流程和提词器叠加已实现；重复进入采用生命周期 UUID 隔离并加入准备超时/真实重试，iPhone 16 连续 10 轮复测通过 |
 | 4 | 实时语音跟随 | 未开始 | 未运行 | 未运行 | 未执行 | 语音识别隐私路径需先确认 |
 | 5 | 分段录制与错句重拍 | 未开始 | 未运行 | 未运行 | 未执行 | — |
 | 6 | 视频拼接、字幕与导出 | 未开始 | 未运行 | 未运行 | 未执行 | 字幕时间来源与量化标准需先确认 |
@@ -105,7 +105,16 @@
 - 本轮 UI 首次全量复验为 16/17：失败结果包证明 App 已出现新的“正在滚动”元素，但 XCTest 仍轮询倒计时阶段的旧 SwiftUI 可访问性元素。等待器改为每次轮询重新读取可访问性树；期间模拟器服务也出现元素已经存在但 `waitForExistence` 超时及冷启动等待系统 App 约 110 秒的异常。只重启模拟器、不抹除数据后，目标流程 1/1 和最终全量 17/17 通过；没有延长原状态时限、删除测试或接受错误状态。
 - 模块 2 硬性能测试使用 iPhone 17 Pro / iOS 26.0.1 模拟器、Debug、从 SwiftData 值读取和后台索引到虚拟化首屏可交互的既定测量方式。一次受模拟器服务异常迟滞影响的尝试真实失败：1 万字符 553.339 ms（读取 5.203、索引 62.222、渲染 485.864 ms），超过 500 ms；同一轮测试进程总耗时异常膨胀到 124 秒。未放宽阈值；冷重启后从零连续三轮各 8/8 通过：1 万字符 236.269 / 430.771 / 248.552 ms（阈值 500 ms），10 万字符 470.239 / 739.123 / 534.147 ms（阈值 2,000 ms）。结果包为 `.build/Module3ReleaseBaseline-Perf-Clean1-20260729.xcresult` 至 `Clean3`；远端跳转、跨块重排、运行事件和缓存上限断言均通过。这些是本机模拟器防退化数据，不是真机保证。
 - 最终源码与产品静态检查通过：Swift/GCC 警告即错误构建没有项目源码警告；Xcode 的 AppIntents 元数据工具仍输出既有“未链接 AppIntents，跳过提取”提示。`plutil -lint` 对工程和隐私清单通过，`git diff --check` 通过；扫描未发现密钥、账号、证书、签名资料、构建产物、第三方 SDK、正式 `DEVELOPMENT_TEAM`、完整照片读取权限或模块 4 代码。
-- 真实摄像头、麦克风、编码器、镜像、方向、焦点/曝光、防抖、Bluetooth 路由、系统中断、媒体服务重置、低空间封口、Photos、30 分钟热量/功耗/音画同步与异常文件可播放性无法由模拟器证明，模块状态保持“进行中”，详见 M3-01 至 M3-15。
+- 真机重复进入缺陷根因（2026-07-29）：依赖容器会跨页面复用同一个 `AVFoundationCaptureService`，而原实现只暴露一个非广播 `AsyncStream` continuation。首次页面退出时没有取消旧 `eventTask`、使尚未完成的 `prepare()` 失效或等待 `stopRunning()` 完成，因此旧页面仍可能竞争消费第二次启动的 `.sessionReady`；旧 ViewModel 因已不可见而丢弃该事件，新 ViewModel 则永久停在 `configuring`。这与真机“绿色摄像头指示已出现但新页面黑屏并持续准备”的现象一致。
+- 重复进入生命周期加固：每次页面进入建立独立 session UUID 与 ViewModel generation，Capture 事件按生命周期单独投递；退出先使代次失效、取消准备/倒计时/监控任务，再等待同一 AVFoundation 串行队列完成安全停止。配置、`startRunning()`、`stopRunning()`、输入输出修改仍全部在原有单一串行上下文；start、stop、退出均幂等，旧 session 事件不能污染新页面，未创建并行 `AVCaptureSession`。准备超过 12 秒进入类型化错误并显示“重新尝试”；重试会完整结束旧生命周期并生成新 UUID 重新配置，不是只改 UI 状态。
+- 录制中退出加固：若页面退出时仍在录制，先请求一次安全停止并等待带原录制 UUID 的完成回调提交文件；8 秒安全界限后仍未完成则保留为可恢复状态，随后再停止会话。停止竞争由 `stoppingRecordingID` 去重，避免用户停止、退出和中断重复调用 Movie Output；迟到完成只允许结算精确匹配的待处理录制，不得更新已退出页面或下一生命周期。
+- 重复进入修复后的最终模拟器构建：iPhone 17 Pro / iOS 26.0.1 Debug 与 iPad Pro 11-inch (M4) / iOS 26.0.1 Debug 均 `BUILD SUCCEEDED`。没有新增 Swift 源码警告；仅保留 Xcode AppIntents 元数据工具的既有“未链接 AppIntents”提示。
+- 重复进入修复后的设备 SDK Release 复验：`xcodebuild -project TakeFlow.xcodeproj -scheme TakeFlow -configuration Release -destination 'generic/platform=iOS' -derivedDataPath .build/Module3RepeatedEntry-DeviceRelease CODE_SIGNING_ALLOWED=NO build`，arm64 / iOS 17.0，`BUILD SUCCEEDED`。Release App 仅含可执行文件、`Info.plist`、`PrivacyInfo.xcprivacy` 和 `PkgInfo`；字符串扫描未发现 Fake Capture、测试开关或测试摄像头文案，Debug/Release 隔离保持不变。
+- 重复进入修复后的最终单元测试：`xcodebuild -project TakeFlow.xcodeproj -scheme TakeFlow -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -derivedDataPath .build/DerivedData -resultBundlePath .build/Module3RepeatedEntry-Units-Final-20260729-Retry.xcresult -only-testing:TakeFlowTests test`，iPhone 17 Pro / iOS 26.0.1，139 项通过、0 失败、0 跳过。新增覆盖首次进入→退出→第二次成功、连续 20 次进入退出、准备中退出后重入、重复 start/stop 幂等、首次生命周期迟到回调隔离、准备超时及真实重试、后台/中断后重入，以及录制中退出完成后再释放生命周期。
+- 重复进入修复后的最终 UI 测试：iPhone 17 Pro / iOS 26.0.1，19 项通过、0 失败、0 跳过，结果包 `.build/DerivedData/Logs/Test/Test-TakeFlow-2026.07.29_20-10-10-+0800.xcresult`。新增二次进入和准备超时→“重新尝试”→恢复流程。首次全量运行中，既有拖动测试使用 20 行短稿，一次滑动已到真实结尾而得到正确 `finished` 状态；测试稿扩展为 100 行以确保断言的确是中段继续，未放宽状态时限或接受错误状态，最终全量通过。
+- 本轮最终全量单元测试内的模块 2 性能回归继续通过：1 万字符从读取、索引到首屏为 98.750 ms，10 万字符为 208.356 ms；普通偏好重排为 0.324 秒，LRU 上限与唯一滚动状态机测试通过。这些是 iPhone 17 Pro / iOS 26.0.1 模拟器 Debug 的单次防退化观测，不是真机性能保证。
+- M3-16 真实设备验收（2026-07-29）：iPhone 16 / iOS 26.5.2，测试版本为 `HEAD` `10480d3e37800432d2944bb10383a581be90fd3c` 加本次未提交摄像头生命周期修复。连续 10 轮执行“进入摄像提词→约 1 秒出现预览→录制 5 秒→停止→播放→退出→再次进入”，10/10 通过；每轮文件均可播放且有声音，每轮退出后绿色摄像头指示均消失，全程无需强制结束 App，未再出现黑屏或永久停留在“正在准备摄像头”。这验证了当前页面退出时在同一串行队列停止会话、下一生命周期重新初始化的真实硬件路径。
+- M3-16 已通过，但真实方向、镜像、焦点/曝光、防抖、Bluetooth 路由、系统中断、媒体服务重置、低空间封口、Photos、30 分钟热量/功耗/音画同步与异常文件可播放性仍需 M3-01 至 M3-15 验证，因此模块 3 状态保持“进行中”。
 
 ## 规格审查：待确认、遗漏与技术风险
 

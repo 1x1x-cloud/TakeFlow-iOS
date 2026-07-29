@@ -153,6 +153,188 @@ final class CameraRecordingViewModelTests: XCTestCase {
         XCTAssertEqual(configureCount, 0)
     }
 
+    func testFirstEntryExitAndSecondEntryBothBecomeReady() async throws {
+        let capture = TestCaptureSession()
+        let first = makeFixture(capture: capture).viewModel
+        await first.prepare()
+        try await waitUntil { first.state == .ready }
+        await first.viewDidDisappear()
+
+        let second = makeFixture(capture: capture).viewModel
+        await second.prepare()
+        try await waitUntil { second.state == .ready }
+
+        let configureCount = await capture.configureCount
+        let startPreviewCount = await capture.startPreviewCount
+        XCTAssertEqual(configureCount, 2)
+        XCTAssertEqual(startPreviewCount, 2)
+        XCTAssertEqual(second.configuration?.position, .front)
+    }
+
+    func testTwentyEntryExitCyclesRemainReadyAndStopExactlyOnce()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        for _ in 0..<20 {
+            let viewModel = makeFixture(capture: capture).viewModel
+            await viewModel.prepare()
+            try await waitUntil { viewModel.state == .ready }
+            await viewModel.viewDidDisappear()
+            await viewModel.viewDidDisappear()
+        }
+
+        let configureCount = await capture.configureCount
+        let startPreviewCount = await capture.startPreviewCount
+        let stopPreviewCount = await capture.stopPreviewCount
+        XCTAssertEqual(configureCount, 20)
+        XCTAssertEqual(startPreviewCount, 20)
+        XCTAssertEqual(stopPreviewCount, 20)
+    }
+
+    func testExitDuringPreparationDoesNotBlockNextEntry()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        await capture.setSuspendsPreview(true)
+        let first = makeFixture(capture: capture).viewModel
+        let firstPreparation = Task { await first.prepare() }
+        try await waitUntil { await capture.startPreviewCount == 0 }
+        try await waitUntil {
+            await capture.configuredSessionIDs.count == 1
+        }
+        await first.viewDidDisappear()
+
+        await capture.setSuspendsPreview(false)
+        let second = makeFixture(capture: capture).viewModel
+        await second.prepare()
+        try await waitUntil { second.state == .ready }
+        await capture.resumeSuspendedPreviews()
+        await firstPreparation.value
+
+        XCTAssertEqual(second.state, .ready)
+        XCTAssertEqual(second.configuration?.position, .front)
+    }
+
+    func testRepeatedPrepareAndStopAreIdempotent() async throws {
+        let capture = TestCaptureSession()
+        let viewModel = makeFixture(capture: capture).viewModel
+
+        await viewModel.prepare()
+        try await waitUntil { viewModel.state == .ready }
+        await viewModel.prepare()
+        await viewModel.viewDidDisappear()
+        await viewModel.viewDidDisappear()
+
+        let configureCount = await capture.configureCount
+        let startPreviewCount = await capture.startPreviewCount
+        let stopPreviewCount = await capture.stopPreviewCount
+        XCTAssertEqual(configureCount, 1)
+        XCTAssertEqual(startPreviewCount, 1)
+        XCTAssertEqual(stopPreviewCount, 1)
+    }
+
+    func testExitWhileRecordingFinalizesBeforeLifecycleEnds()
+        async throws
+    {
+        let capture = TestCaptureSession(finishesWhenStopped: true)
+        let files = TestRecordingFileStore()
+        let fixture = makeFixture(capture: capture, files: files)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        _ = try await waitForRecordingID(viewModel: fixture.viewModel)
+
+        await fixture.viewModel.viewDidDisappear()
+
+        let stopCount = await capture.stopRecordingCount
+        let completeCount = await files.completeCount
+        XCTAssertEqual(stopCount, 1)
+        XCTAssertEqual(completeCount, 1)
+        XCTAssertNotNil(fixture.viewModel.completedRecording)
+    }
+
+    func testLateReadyEventFromFirstSessionCannotChangeSecondSession()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let first = makeFixture(capture: capture).viewModel
+        await first.prepare()
+        try await waitUntil { first.state == .ready }
+        let configuredSessionIDs = await capture.configuredSessionIDs
+        let firstSessionID = try XCTUnwrap(configuredSessionIDs.first)
+        await first.viewDidDisappear()
+
+        let second = makeFixture(capture: capture).viewModel
+        await second.prepare()
+        try await waitUntil { second.state == .ready }
+        await capture.emitReadyForTesting(
+            sessionID: firstSessionID,
+            position: .back
+        )
+        try? await Task.sleep(for: .milliseconds(20))
+
+        XCTAssertEqual(second.state, .ready)
+        XCTAssertEqual(second.configuration?.position, .front)
+    }
+
+    func testPreparationTimeoutShowsRetryAndRetryRecovers()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        await capture.setSuspendsPreview(true)
+        let fixture = makeFixture(
+            capture: capture,
+            preparationTimeout: .milliseconds(30)
+        )
+        let firstPreparation = Task {
+            await fixture.viewModel.prepare()
+        }
+        try await waitUntil {
+            fixture.viewModel.state == .failed(.preparationTimedOut)
+        }
+
+        XCTAssertTrue(fixture.viewModel.canRetryPreparation)
+        XCTAssertTrue(
+            fixture.viewModel.errorMessage?.contains("准备超时") == true
+        )
+
+        await capture.setSuspendsPreview(false)
+        await fixture.viewModel.retryPreparation()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        await capture.resumeSuspendedPreviews()
+        await firstPreparation.value
+
+        XCTAssertEqual(fixture.viewModel.state, .ready)
+        let configureCount = await capture.configureCount
+        XCTAssertEqual(configureCount, 2)
+    }
+
+    func testBackgroundInterruptionThenReentryDoesNotRemainPreparing()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let first = makeFixture(capture: capture).viewModel
+        await first.prepare()
+        try await waitUntil { first.state == .ready }
+        first.sceneDidEnterBackground()
+        try await waitUntil {
+            if case .interrupted = first.state {
+                return true
+            }
+            return false
+        }
+        first.sceneDidBecomeActive()
+        await first.viewDidDisappear()
+
+        let second = makeFixture(capture: capture).viewModel
+        await second.prepare()
+        try await waitUntil { second.state == .ready }
+
+        XCTAssertEqual(second.state, .ready)
+        let configureCount = await capture.configureCount
+        XCTAssertEqual(configureCount, 2)
+    }
+
     func testLowStorageBlocksRecordingBeforeFileCreation() async throws {
         let files = TestRecordingFileStore()
         let fixture = makeFixture(
@@ -489,7 +671,8 @@ final class CameraRecordingViewModelTests: XCTestCase {
             capacities: [Int64.max]
         ),
         photos: TestPhotoLibrary = TestPhotoLibrary(result: .saved),
-        audio: TestAudioSession = TestAudioSession()
+        audio: TestAudioSession = TestAudioSession(),
+        preparationTimeout: Duration = .seconds(1)
     ) -> (
         viewModel: CameraRecordingViewModel,
         capture: TestCaptureSession,
@@ -509,6 +692,7 @@ final class CameraRecordingViewModelTests: XCTestCase {
             ),
             countdownSeconds: 1,
             countdownStep: .milliseconds(5),
+            preparationTimeout: preparationTimeout,
             isUITestFake: true
         )
         return (
@@ -604,12 +788,21 @@ private final class TestCapturePermissions: PermissionAuthorizing {
 }
 
 private actor TestCaptureSession: CaptureSessionServicing {
-    private let stream: AsyncStream<CaptureSessionEvent>
-    private let continuation: AsyncStream<CaptureSessionEvent>.Continuation
+    private var continuations:
+        [UUID: AsyncStream<CaptureSessionEvent>.Continuation] = [:]
     private let availableFormats: [CaptureFormatOption]
     private let focusError: CaptureError?
-    private var active: (id: UUID, url: URL)?
+    private let finishesWhenStopped: Bool
+    private var activeSessionID: UUID?
+    private var configuration: CaptureConfiguration?
+    private var active: (id: UUID, url: URL, sessionID: UUID)?
+    private var suspendsPreview = false
+    private var suspendedPreviewContinuations:
+        [UUID: CheckedContinuation<Void, Never>] = [:]
+    private(set) var configuredSessionIDs: [UUID] = []
     private(set) var configureCount = 0
+    private(set) var startPreviewCount = 0
+    private(set) var stopPreviewCount = 0
     private(set) var startRecordingCount = 0
     private(set) var stopRecordingCount = 0
     private(set) var switchCount = 0
@@ -630,30 +823,106 @@ private actor TestCaptureSession: CaptureSessionServicing {
                 codec: .hevc
             )
         ],
-        focusError: CaptureError? = nil
+        focusError: CaptureError? = nil,
+        finishesWhenStopped: Bool = false
     ) {
         self.availableFormats = availableFormats
         self.focusError = focusError
+        self.finishesWhenStopped = finishesWhenStopped
+    }
+
+    func events(
+        for sessionID: UUID
+    ) async -> AsyncStream<CaptureSessionEvent> {
         let pair = AsyncStream<CaptureSessionEvent>.makeStream(
             bufferingPolicy: .bufferingNewest(64)
         )
-        stream = pair.stream
-        continuation = pair.continuation
-    }
-
-    func events() async -> AsyncStream<CaptureSessionEvent> {
-        stream
+        continuations.removeValue(forKey: sessionID)?.finish()
+        continuations[sessionID] = pair.continuation
+        return pair.stream
     }
 
     func configure(
+        sessionID: UUID,
         position: CameraPosition,
         preferredResolution: VideoResolution
     ) async throws {
         configureCount += 1
+        configuredSessionIDs.append(sessionID)
+        if let previousSessionID = activeSessionID,
+           previousSessionID != sessionID {
+            continuations.removeValue(forKey: previousSessionID)?.finish()
+        }
+        activeSessionID = sessionID
         let selected = availableFormats.first {
             $0.resolution == preferredResolution
         } ?? availableFormats[0]
-        continuation.yield(
+        configuration = CaptureConfiguration(
+            position: position,
+            format: selected,
+            previewMirrored: position == .front,
+            outputMirrored: false
+        )
+    }
+
+    func startPreview(sessionID: UUID) async throws {
+        if suspendsPreview {
+            await withCheckedContinuation { continuation in
+                suspendedPreviewContinuations[sessionID] = continuation
+            }
+        }
+        guard
+            activeSessionID == sessionID,
+            let configuration
+        else {
+            throw CaptureError.staleCallback
+        }
+        startPreviewCount += 1
+        continuations[sessionID]?.yield(
+            .sessionReady(
+                source: nil,
+                configuration: configuration,
+                capabilities: CaptureCapabilities(
+                    availableFormats: availableFormats,
+                    supportsFocusPoint: true,
+                    supportsExposurePoint: true,
+                    supportsFocusLock: true,
+                    supportsExposureLock: true,
+                    supportsVideoStabilization: true
+                )
+            )
+        )
+    }
+
+    func stopPreview(sessionID: UUID) async {
+        stopPreviewCount += 1
+        guard activeSessionID == sessionID else {
+            continuations.removeValue(forKey: sessionID)?.finish()
+            return
+        }
+        if active == nil {
+            activeSessionID = nil
+            configuration = nil
+            continuations.removeValue(forKey: sessionID)?.finish()
+        }
+    }
+
+    func setSuspendsPreview(_ suspends: Bool) {
+        suspendsPreview = suspends
+    }
+
+    func resumeSuspendedPreviews() {
+        let continuations = Array(suspendedPreviewContinuations.values)
+        suspendedPreviewContinuations.removeAll()
+        continuations.forEach { $0.resume() }
+    }
+
+    func emitReadyForTesting(
+        sessionID: UUID,
+        position: CameraPosition = .back
+    ) {
+        let selected = availableFormats[0]
+        continuations[sessionID]?.yield(
             .sessionReady(
                 source: nil,
                 configuration: CaptureConfiguration(
@@ -674,11 +943,10 @@ private actor TestCaptureSession: CaptureSessionServicing {
         )
     }
 
-    func startPreview() async throws {}
-
-    func stopPreview() async {}
-
-    func switchCamera() async throws {
+    func switchCamera(sessionID: UUID) async throws {
+        guard activeSessionID == sessionID else {
+            throw CaptureError.staleCallback
+        }
         guard active == nil else {
             throw CaptureError.cameraSwitchDuringRecording
         }
@@ -686,48 +954,80 @@ private actor TestCaptureSession: CaptureSessionServicing {
     }
 
     func startRecording(
+        sessionID: UUID,
         recordingID: UUID,
         outputURL: URL,
         rotationAngle: Double
     ) async throws {
+        guard activeSessionID == sessionID else {
+            throw CaptureError.staleCallback
+        }
         guard active == nil else {
             throw CaptureError.alreadyRecording
         }
         startRecordingCount += 1
         lastStartRotationAngle = rotationAngle
-        active = (recordingID, outputURL)
+        active = (recordingID, outputURL, sessionID)
     }
 
     func stopRecording(recordingID: UUID) async throws {
-        guard active?.id == recordingID else {
+        guard let recording = active, recording.id == recordingID else {
             throw CaptureError.notRecording
         }
         stopRecordingCount += 1
+        if finishesWhenStopped {
+            active = nil
+            continuations[recording.sessionID]?.yield(
+                .recordingFinished(
+                    recordingID: recording.id,
+                    outputURL: recording.url,
+                    duration: 2
+                )
+            )
+        }
     }
 
     func setFocusAndExposure(
+        sessionID: UUID,
         at point: NormalizedCapturePoint,
         locked: Bool
     ) async throws {
+        guard activeSessionID == sessionID else {
+            throw CaptureError.staleCallback
+        }
         if let focusError {
             throw focusError
         }
     }
 
-    func handleApplicationBackgrounded() async {
+    func handleApplicationBackgrounded(sessionID: UUID) async {
+        guard activeSessionID == sessionID else {
+            return
+        }
         backgroundCount += 1
         if let active {
-            continuation.yield(
+            continuations[sessionID]?.yield(
                 .interrupted(
                     recordingID: active.id,
                     reason: .applicationBackgrounded,
                     outputURL: active.url
                 )
             )
+        } else {
+            continuations[sessionID]?.yield(
+                .interrupted(
+                    recordingID: nil,
+                    reason: .applicationBackgrounded,
+                    outputURL: nil
+                )
+            )
         }
     }
 
-    func handleApplicationForegrounded() async {
+    func handleApplicationForegrounded(sessionID: UUID) async {
+        guard activeSessionID == sessionID else {
+            return
+        }
         foregroundCount += 1
     }
 
@@ -739,20 +1039,26 @@ private actor TestCaptureSession: CaptureSessionServicing {
         } else {
             url = URL(fileURLWithPath: "/tmp/stale.mov")
         }
-        continuation.yield(
+        let sessionID = active?.sessionID ?? activeSessionID
+        if let sessionID {
+            continuations[sessionID]?.yield(
             .recordingFinished(
                 recordingID: recordingID,
                 outputURL: url,
                 duration: 2
             )
-        )
+            )
+        }
     }
 
     func interrupt(
         recordingID: UUID,
         reason: CaptureInterruptionReason
     ) {
-        continuation.yield(
+        guard let sessionID = active?.sessionID ?? activeSessionID else {
+            return
+        }
+        continuations[sessionID]?.yield(
             .interrupted(
                 recordingID: recordingID,
                 reason: reason,

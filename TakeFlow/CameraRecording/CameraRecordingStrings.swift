@@ -6,7 +6,7 @@ enum CameraRecordingStrings {
     static let ready = "预览已就绪"
     static let record = "开始录制"
     static let stop = "停止录制"
-    static let retry = "重新准备"
+    static let retry = "重新尝试"
     static let switchCamera = "切换前后摄像头"
     static let focusLock = "锁定焦点和曝光"
     static let focusUnlocked = "焦点和曝光自动调整"
