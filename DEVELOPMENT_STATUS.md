@@ -16,7 +16,7 @@
 
 | 模块 | 名称 | 状态 | 构建 | 自动化测试 | 真机验证 | 备注 |
 |---|---|---|---|---|---|---|
-| 0 | 工程初始化与规则建立 | 已完成 | iPhone、iPad 模拟器构建通过 | 5 通过、0 失败 | 模拟器启动通过；正式签名、真机与 TestFlight 未验证 | `TakeFlow` App、单测、UI 测试三个 Target 已建立；发布前手动项见 M0-01 至 M0-06 |
+| 0 | 工程初始化与规则建立 | 已完成 | iPhone、iPad 模拟器构建通过；正式签名的连接 iPhone Debug 与 Generic iOS Device Release 构建通过 | 5 通过、0 失败 | M3-16 已证明正式签名 App 可在 iPhone 运行；干净安装、iPad 与 TestFlight 仍未完整验证 | `TakeFlow` App、单测、UI 测试三个 Target 已建立；正式身份已配置，发布前手动项仍见 M0-01 至 M0-06 |
 | 1 | 稿件管理与编辑 | 进行中 | iPhone、iPad 模拟器 Debug 构建通过 | 单元测试 33/33；UI 测试 4/4 | M1-01 至 M1-07 待执行 | SwiftData 本地持久化、V1 Schema 与独立恢复草稿已落地；状态保留为“进行中”，直到真机强杀恢复、输入、性能、离线和低存储验收完成 |
 | 2 | 基础提词器 | 进行中 | iPhone、iPad 模拟器 Debug 构建通过 | 单元测试 74/74；UI 测试 9/9（含模块 1 全量回归） | M2-01 至 M2-10 待执行 | 固定速度、唯一状态机、全局 Character 锚点、每稿偏好及有界分块虚拟化已实现；模拟器 1 万/10 万字符内部阈值通过，真机滚动、辅助功能及长稿性能未验收 |
 | 3 | 摄像头与视频录制 | 进行中 | iPhone、iPad 模拟器 Debug、Generic iOS Device 无签名 Debug、Generic iOS Device 无签名 Release 构建通过 | 单元测试 139/139；UI 测试 19/19（含模块 1、2 全量回归）；模块 2 性能阈值继续通过 | M3-16 通过；M3-01 至 M3-15 待执行 | 显式录制状态机、AVFoundation 串行服务、动态能力矩阵、私有录制文件恢复、低空间保护、Debug-only Fake UI 流程和提词器叠加已实现；重复进入采用生命周期 UUID 隔离并加入准备超时/真实重试，iPhone 16 连续 10 轮复测通过 |
@@ -43,8 +43,8 @@
 - UI 测试：`testLaunchShowsMinimalHome` 共 1 项，1 通过、0 失败；测试真实启动 App 并断言 `home.title` 与 `home.status` 存在。
 - 首页视觉核对：已在 iPhone 17 Pro 模拟器重新安装并启动 App，确认显示“首页”“一遍成”“工程基础已就绪”。
 - 编译器未报告 Swift 源码警告。Xcode 26 的 `appintentsmetadataprocessor` 对未链接 AppIntents 的 Target 输出一次系统工具提示：“Metadata extraction skipped. No AppIntents.framework dependency found.” 本项目未使用 AppIntents，不影响产物；该提示不来自项目源码。
-- 未配置正式开发团队、正式 Bundle ID、权限 entitlement 或真实密钥；当前 Bundle ID 为 `com.example.takeflow.placeholder`。
-- 正式签名、真实 iPhone/iPad 安装和 TestFlight 分发尚未验证，不能作为发布就绪证据。
+- 2026-07-29 已批准并配置正式 Bundle ID `com.yudiemin.takeflow`、Development Team `YW3253598N`、显示名、分类、权限用途、方向和启动配置；Debug 与 Release 的对应构建设置一致。
+- 使用现有本地 Apple Development 签名资料对连接的真实 iPhone 执行 Debug build 成功，并对 Generic iOS Device 执行 Release build 成功；最低目标为 iOS 17.0。证书、私钥、描述文件和账号凭据均未加入仓库。M3-16 已证明正式签名 App 可在 iPhone 16 / iOS 26.5.2 运行，但干净安装启动、iPad 和 TestFlight 分发仍未完整验证，不能作为发布就绪证据。
 - 未引入第三方包或 SDK；当前业务实现仅限模块 1、模块 2 和模块 3，模块 4 至模块 9 的目录仍只保留边界说明。
 
 ### 模块 1 验证事实
@@ -97,14 +97,14 @@
 - 最终 iPhone 构建：`xcodebuild -project TakeFlow.xcodeproj -scheme TakeFlow -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -derivedDataPath .build/Module3FinalBuild-iPhone build -quiet`，iPhone 17 Pro / iOS 26.0.1，退出码 0。
 - 最终 iPad 构建：`xcodebuild -project TakeFlow.xcodeproj -scheme TakeFlow -configuration Debug -destination 'platform=iOS Simulator,name=iPad Pro 11-inch (M4)' -derivedDataPath .build/Module3FinalBuild-iPad build -quiet`，iPad Pro 11-inch (M4) / iOS 26.0.1，退出码 0。
 - Generic iOS Device Debug 编译：`xcodebuild -project TakeFlow.xcodeproj -scheme TakeFlow -configuration Debug -destination 'generic/platform=iOS' -derivedDataPath .build/Module3DeviceDebug CODE_SIGNING_ALLOWED=NO build -quiet`，退出码 0。Release 编译使用相同 Generic iOS Device、`.build/Module3DeviceRelease`、`CODE_SIGNING_ALLOWED=NO`，并设置 `SWIFT_TREAT_WARNINGS_AS_ERRORS=YES`、`GCC_TREAT_WARNINGS_AS_ERRORS=YES`，`BUILD SUCCEEDED`；实际 arm64 产物最低版本为 iOS 17.0。首次把条件编译跨越 SwiftUI `else if` 分支时编译失败，修正为独立 `@ViewBuilder` 边界后最终复验通过，失败期间没有提交。
-- Release 产品审计：生产 App 只包含二进制、`Info.plist`、`PrivacyInfo.xcprivacy` 和 `PkgInfo`，无测试媒体、测试 Bundle、调试菜单或代码签名目录。UI 测试启动参数、Fake Capture 服务、Fake 权限/空间/照片/音频服务及 Fake 预览文案均由 `#if DEBUG` 隔离；对 Release 二进制执行字符串和符号扫描，相关匹配为 0。未写入 `DEVELOPMENT_TEAM`，Bundle ID 仍是明确占位值 `com.example.takeflow.placeholder`。
+- Release 产品审计：模块 3 软件基线建立时，生产 App 只包含二进制、`Info.plist`、`PrivacyInfo.xcprivacy` 和 `PkgInfo`，无测试媒体、测试 Bundle、调试菜单或代码签名目录；当时仍使用占位 Bundle ID 且未写入 `DEVELOPMENT_TEAM`。UI 测试启动参数、Fake Capture 服务、Fake 权限/空间/照片/音频服务及 Fake 预览文案均由 `#if DEBUG` 隔离；对 Release 二进制执行字符串和符号扫描，相关匹配为 0。2026-07-29 后续正式身份配置没有改变该 Debug/Release 代码隔离。
 - iOS 17 与权限审计：Generic arm64 iOS 17 编译在警告即错误模式下通过；源码没有无保护的 iOS 18、iOS 26 或 Beta API，也未使用已废弃 `videoOrientation`。`AVCaptureDevice.RotationCoordinator` 与 `videoRotationAngle` 在本机 iOS SDK 头文件中标注 iOS 17 可用。Release `Info.plist` 的摄像头说明为“用于在您主动进入摄像提词并开始录制时拍摄视频。”，麦克风说明为“用于在您主动开始视频录制时同步录制声音。”，照片添加说明为“仅在您主动选择保存到照片时添加已完成的视频。”；不存在 `NSPhotoLibraryUsageDescription`，代码只使用 Photos `.addOnly`。
 - 隐私清单：源码与 Release App 内嵌 `PrivacyInfo.xcprivacy` 均通过 `plutil -lint`。清单声明不跟踪、无跟踪域、无收集数据类型，仅为实际使用的磁盘可用空间 API 声明 `NSPrivacyAccessedAPICategoryDiskSpace` / `E174.1`；与当前无网络客户端、无分析 SDK、无照片读取权限的代码一致。
 - 最终全量单元测试：`xcodebuild ... -derivedDataPath .build/Module3ReleaseBaseline -resultBundlePath .build/Module3ReleaseBaseline-Units-Retry-20260729.xcresult -only-testing:TakeFlowTests test -quiet`，iPhone 17 Pro / iOS 26.0.1，131 项通过、0 失败、0 跳过。包含模块 1、2 的 74 项基线、56 项模块 3 状态/配置/文件/ViewModel/集成测试和 1 项可见块裁切回归测试。
 - 最终全量 UI 测试：`xcodebuild ... -derivedDataPath .build/Module3ReleaseBaseline -resultBundlePath .build/Module3ReleaseBaseline-UI-Final-20260729.xcresult -only-testing:TakeFlowUITests test -quiet`，17 项通过、0 失败、0 跳过。新增 8 项 Fake Capture 流程覆盖允许→就绪→倒计时→录制→停止→本地预览、摄像头拒绝、麦克风拒绝、中断保留、低空间、录制中切换禁用、回前台不自动恢复，以及提词开始/暂停/拖动继续；Fake 仅存在于 Debug。
 - 本轮 UI 首次全量复验为 16/17：失败结果包证明 App 已出现新的“正在滚动”元素，但 XCTest 仍轮询倒计时阶段的旧 SwiftUI 可访问性元素。等待器改为每次轮询重新读取可访问性树；期间模拟器服务也出现元素已经存在但 `waitForExistence` 超时及冷启动等待系统 App 约 110 秒的异常。只重启模拟器、不抹除数据后，目标流程 1/1 和最终全量 17/17 通过；没有延长原状态时限、删除测试或接受错误状态。
 - 模块 2 硬性能测试使用 iPhone 17 Pro / iOS 26.0.1 模拟器、Debug、从 SwiftData 值读取和后台索引到虚拟化首屏可交互的既定测量方式。一次受模拟器服务异常迟滞影响的尝试真实失败：1 万字符 553.339 ms（读取 5.203、索引 62.222、渲染 485.864 ms），超过 500 ms；同一轮测试进程总耗时异常膨胀到 124 秒。未放宽阈值；冷重启后从零连续三轮各 8/8 通过：1 万字符 236.269 / 430.771 / 248.552 ms（阈值 500 ms），10 万字符 470.239 / 739.123 / 534.147 ms（阈值 2,000 ms）。结果包为 `.build/Module3ReleaseBaseline-Perf-Clean1-20260729.xcresult` 至 `Clean3`；远端跳转、跨块重排、运行事件和缓存上限断言均通过。这些是本机模拟器防退化数据，不是真机保证。
-- 最终源码与产品静态检查通过：Swift/GCC 警告即错误构建没有项目源码警告；Xcode 的 AppIntents 元数据工具仍输出既有“未链接 AppIntents，跳过提取”提示。`plutil -lint` 对工程和隐私清单通过，`git diff --check` 通过；扫描未发现密钥、账号、证书、签名资料、构建产物、第三方 SDK、正式 `DEVELOPMENT_TEAM`、完整照片读取权限或模块 4 代码。
+- 最终源码与产品静态检查通过：Swift/GCC 警告即错误构建没有项目源码警告；Xcode 的 AppIntents 元数据工具仍输出既有“未链接 AppIntents，跳过提取”提示。`plutil -lint` 对工程和隐私清单通过，`git diff --check` 通过；模块 3 软件基线扫描未发现密钥、账号、证书、签名资料、构建产物、第三方 SDK、完整照片读取权限或模块 4 代码。后续正式身份提交仅加入获批的 Team ID 与 Bundle ID，不包含签名资产或账号凭据。
 - 真机重复进入缺陷根因（2026-07-29）：依赖容器会跨页面复用同一个 `AVFoundationCaptureService`，而原实现只暴露一个非广播 `AsyncStream` continuation。首次页面退出时没有取消旧 `eventTask`、使尚未完成的 `prepare()` 失效或等待 `stopRunning()` 完成，因此旧页面仍可能竞争消费第二次启动的 `.sessionReady`；旧 ViewModel 因已不可见而丢弃该事件，新 ViewModel 则永久停在 `configuring`。这与真机“绿色摄像头指示已出现但新页面黑屏并持续准备”的现象一致。
 - 重复进入生命周期加固：每次页面进入建立独立 session UUID 与 ViewModel generation，Capture 事件按生命周期单独投递；退出先使代次失效、取消准备/倒计时/监控任务，再等待同一 AVFoundation 串行队列完成安全停止。配置、`startRunning()`、`stopRunning()`、输入输出修改仍全部在原有单一串行上下文；start、stop、退出均幂等，旧 session 事件不能污染新页面，未创建并行 `AVCaptureSession`。准备超过 12 秒进入类型化错误并显示“重新尝试”；重试会完整结束旧生命周期并生成新 UUID 重新配置，不是只改 UI 状态。
 - 录制中退出加固：若页面退出时仍在录制，先请求一次安全停止并等待带原录制 UUID 的完成回调提交文件；8 秒安全界限后仍未完成则保留为可恢复状态，随后再停止会话。停止竞争由 `stoppingRecordingID` 去重，避免用户停止、退出和中断重复调用 Movie Output；迟到完成只允许结算精确匹配的待处理录制，不得更新已退出页面或下一生命周期。

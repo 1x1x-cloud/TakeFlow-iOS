@@ -150,7 +150,7 @@ xcodebuild -project TakeFlow.xcodeproj \
   -only-testing:TakeFlowUITests \
   test
 
-# 发布前 Release 归档；仅在正式 Bundle ID 和开发团队获批后执行
+# 发布前 Release 归档；须使用已批准的正式身份并在归档后继续验证
 xcodebuild -project TakeFlow.xcodeproj \
   -scheme TakeFlow \
   -configuration Release \
@@ -159,7 +159,7 @@ xcodebuild -project TakeFlow.xcodeproj \
   -archivePath .build/TakeFlow.xcarchive
 ```
 
-- 当前 Bundle Identifier `com.example.takeflow.placeholder` 是明确占位值；正式 Bundle ID 和 `DEVELOPMENT_TEAM` 尚未配置。获得批准前不得伪造签名配置，也不得把占位包标识用于发布。
+- 产品负责人已批准正式 Bundle Identifier `com.yudiemin.takeflow` 和 Development Team `YW3253598N`，Debug 与 Release 必须保持一致。证书、私钥、描述文件和账号凭据仍只允许存在于开发机或 Apple 管理的签名环境，不得进入源码、构建设置明文资料、日志或 Git。
 - 不得把 DerivedData、归档、导出视频、真实稿件、密钥或购买凭证提交到仓库。
 - 构建失败时保留完整错误证据；不得通过删除 Target、测试或安全设置来取得绿色结果。
 
