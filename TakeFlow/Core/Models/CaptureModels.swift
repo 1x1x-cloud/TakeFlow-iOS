@@ -53,9 +53,21 @@ enum CaptureInterruptionReason: String, Codable, CaseIterable, Sendable {
     case applicationBackgrounded
     case audioSessionInterrupted
     case cameraUnavailable
+    case audioDeviceInUseByAnotherClient
+    case videoDeviceInUseByAnotherClient
+    case videoDeviceNotAvailableWithMultipleForegroundApps
+    case videoDeviceNotAvailableDueToSystemPressure
+    case sensitiveContentMitigationActivated
     case mediaServicesReset
     case storageSpaceLow
     case unknown
+}
+
+enum CaptureInterruptionSource: String, Codable, Hashable, Sendable {
+    case captureSession
+    case audioSession
+    case applicationLifecycle
+    case storageMonitor
 }
 
 struct AudioInputRoute: Codable, Equatable, Sendable {
@@ -115,6 +127,7 @@ enum CaptureSessionEvent: Sendable {
         reason: CaptureInterruptionReason,
         outputURL: URL?
     )
+    case interruptionEnded(reason: CaptureInterruptionReason?)
     case audioRouteChanged(AudioInputRoute)
     case mediaServicesReset
 }

@@ -63,10 +63,34 @@ final class SystemAudioSessionService: AudioSessionServicing, @unchecked Sendabl
                 let type = rawType.flatMap(
                     AVAudioSession.InterruptionType.init(rawValue:)
                 )
-                continuation.yield(
-                    type == .began
-                        ? .interruptionBegan : .interruptionEnded
+                #if DEBUG
+                let rawOptions = notification.userInfo?[
+                    AVAudioSessionInterruptionOptionKey
+                ] as? UInt
+                AppLogger.info(
+                    "audio_interruption_notification "
+                        + "uptime=\(ProcessInfo.processInfo.systemUptime) "
+                        + "raw_type=\(rawType.map(String.init) ?? "none") "
+                        + "raw_options=\(rawOptions.map(String.init) ?? "none")",
+                    category: .recording
                 )
+                #endif
+                switch type {
+                case .began:
+                    continuation.yield(.interruptionBegan)
+                case .ended:
+                    continuation.yield(.interruptionEnded)
+                case nil:
+                    AppLogger.error(
+                        "audio_interruption_notification_invalid",
+                        category: .recording
+                    )
+                @unknown default:
+                    AppLogger.error(
+                        "audio_interruption_notification_unknown",
+                        category: .recording
+                    )
+                }
             }
             continuation.onTermination = { _ in
                 NotificationCenter.default.removeObserver(routeToken)

@@ -16,6 +16,7 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
     private var currentConfiguration: CaptureConfiguration?
     private var currentCapabilities: CaptureCapabilities = .unavailable
     private var activeSessionID: UUID?
+    private var activeSessionGeneration: UInt64 = 0
     private var eventContinuations:
         [UUID: AsyncStream<CaptureSessionEvent>.Continuation] = [:]
     private var activeRecordings:
@@ -26,10 +27,15 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
     private var notificationTokens: [NSObjectProtocol] = []
     private var shouldStopSessionAfterRecording = false
     private var interruptionWasIssued = false
+    private var lastInterruptionReason: CaptureInterruptionReason?
+
+    private struct NotificationContext: Sendable {
+        let sessionID: UUID
+        let generation: UInt64
+    }
 
     override init() {
         super.init()
-        installNotifications()
     }
 
     deinit {
@@ -78,12 +84,27 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
                     self.session.stopRunning()
                 }
                 self.activeSessionID = sessionID
+                self.activeSessionGeneration &+= 1
                 self.interruptionWasIssued = false
+                self.lastInterruptionReason = nil
+                self.installNotifications(
+                    for: NotificationContext(
+                        sessionID: sessionID,
+                        generation: self.activeSessionGeneration
+                    )
+                )
             }
-            try self.configureLocked(
-                position: position,
-                preferredResolution: preferredResolution
-            )
+            if self.hasConfiguredCaptureGraph {
+                try self.reconfigureVideoLocked(
+                    position: position,
+                    preferredResolution: preferredResolution
+                )
+            } else {
+                try self.configureLocked(
+                    position: position,
+                    preferredResolution: preferredResolution
+                )
+            }
         }
     }
 
@@ -134,10 +155,12 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
                 self.session.stopRunning()
             }
             self.activeSessionID = nil
+            self.activeSessionGeneration &+= 1
             self.currentConfiguration = nil
             self.currentCapabilities = .unavailable
             self.videoInput = nil
             self.audioInput = nil
+            self.removeNotifications()
             self.finishEvents(for: sessionID)
         }
     }
@@ -153,15 +176,19 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
             guard let configuration = self.currentConfiguration else {
                 throw CaptureError.cameraUnavailable
             }
+            guard self.session.isRunning else {
+                throw CaptureError.cameraUnavailable
+            }
             let target: CameraPosition =
                 configuration.position == .front ? .back : .front
-            try self.configureLocked(
+            self.recordDiagnostic(
+                "camera_switch_began",
+                isReconfiguring: true
+            )
+            try self.reconfigureVideoLocked(
                 position: target,
                 preferredResolution: configuration.format.resolution
             )
-            if !self.session.isRunning {
-                self.session.startRunning()
-            }
             guard
                 let updatedConfiguration = self.currentConfiguration,
                 let device = self.videoInput?.device
@@ -178,6 +205,10 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
                     capabilities: self.currentCapabilities
                 ),
                 to: sessionID
+            )
+            self.recordDiagnostic(
+                "camera_switch_completed",
+                isReconfiguring: false
             )
         }
     }
@@ -426,6 +457,108 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
         currentCapabilities = capabilities
     }
 
+    /// Reconfigures only the video input. The microphone input and movie
+    /// output remain attached so a camera switch cannot tear down the audio
+    /// graph while a completed movie is being finalized.
+    private func reconfigureVideoLocked(
+        position: CameraPosition,
+        preferredResolution: VideoResolution
+    ) throws {
+        guard activeRecordingID == nil else {
+            throw CaptureError.alreadyRecording
+        }
+        guard
+            let oldVideoInput = videoInput,
+            let audioInput,
+            session.inputs.contains(where: { $0 === oldVideoInput }),
+            session.inputs.contains(where: { $0 === audioInput }),
+            session.outputs.contains(where: { $0 === movieOutput })
+        else {
+            throw CaptureError.unsupportedConfiguration
+        }
+
+        let devicePosition: AVCaptureDevice.Position =
+            position == .front ? .front : .back
+        guard let device = AVCaptureDevice.default(
+            .builtInWideAngleCamera,
+            for: .video,
+            position: devicePosition
+        ) else {
+            throw CaptureError.cameraUnavailable
+        }
+
+        let supportedResolutions = Set(
+            VideoResolution.allCases.filter {
+                supports(device: device, resolution: $0)
+                    && session.canSetSessionPreset(Self.preset(for: $0))
+            }
+        )
+        let availableCodecs = movieOutput.availableVideoCodecTypes
+        let domainCodecs = Set(
+            availableCodecs.compactMap(Self.domainCodec(for:))
+        )
+        guard
+            let selectedFormat = CaptureFormatSelector.select(
+                preferredResolution: preferredResolution,
+                supportedResolutions: supportedResolutions,
+                availableCodecs: domainCodecs
+            )
+        else {
+            throw CaptureError.unsupportedConfiguration
+        }
+
+        let newVideoInput = try AVCaptureDeviceInput(device: device)
+        session.beginConfiguration()
+        session.removeInput(oldVideoInput)
+        do {
+            let preset = Self.preset(for: selectedFormat.resolution)
+            guard
+                session.canSetSessionPreset(preset),
+                session.canAddInput(newVideoInput)
+            else {
+                throw CaptureError.unsupportedConfiguration
+            }
+            session.sessionPreset = preset
+            session.addInput(newVideoInput)
+            try setThirtyFramesPerSecond(
+                on: device,
+                resolution: selectedFormat.resolution
+            )
+            session.commitConfiguration()
+        } catch {
+            if session.inputs.contains(where: { $0 === newVideoInput }) {
+                session.removeInput(newVideoInput)
+            }
+            if session.canAddInput(oldVideoInput) {
+                session.addInput(oldVideoInput)
+            }
+            session.commitConfiguration()
+            throw error
+        }
+
+        let capabilities = makeCapabilities(
+            device: device,
+            availableCodecs: availableCodecs
+        )
+        videoInput = newVideoInput
+        currentConfiguration = CaptureConfiguration(
+            position: position,
+            format: selectedFormat,
+            previewMirrored: position == .front,
+            outputMirrored: false
+        )
+        currentCapabilities = capabilities
+    }
+
+    private var hasConfiguredCaptureGraph: Bool {
+        guard let videoInput, let audioInput else {
+            return false
+        }
+        return session.inputs.contains(where: { $0 === videoInput })
+            && session.inputs.contains(where: { $0 === audioInput })
+            && session.outputs.contains(where: { $0 === movieOutput })
+    }
+
     private func makeCapabilities(
         device: AVCaptureDevice,
         availableCodecs: [AVVideoCodecType]
@@ -538,11 +671,37 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
         timer.resume()
     }
 
-    private func installNotifications() {
+    private func installNotifications(for context: NotificationContext) {
+        removeNotifications()
         let center = NotificationCenter.default
         notificationTokens.append(
             center.addObserver(
                 forName: .AVCaptureSessionWasInterrupted,
+                object: session,
+                queue: nil
+            ) { [weak self] notification in
+                guard let captureService = self else {
+                    return
+                }
+                let rawReason = notification.userInfo?[
+                    AVCaptureSessionInterruptionReasonKey
+                ] as? NSNumber
+                let rawValue = rawReason?.intValue
+                let reason = Self.domainInterruptionReason(
+                    fromAVFoundationRawValue: rawValue
+                )
+                captureService.sessionQueue.async {
+                    captureService.interruptLocked(
+                        reason: reason,
+                        context: context,
+                        rawReason: rawValue
+                    )
+                }
+            }
+        )
+        notificationTokens.append(
+            center.addObserver(
+                forName: .AVCaptureSessionInterruptionEnded,
                 object: session,
                 queue: nil
             ) { [weak self] _ in
@@ -550,9 +709,7 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
                     return
                 }
                 captureService.sessionQueue.async {
-                    captureService.interruptLocked(
-                        reason: .cameraUnavailable
-                    )
+                    captureService.endInterruptionLocked(context: context)
                 }
             }
         )
@@ -572,26 +729,62 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
                     return
                 }
                 captureService.sessionQueue.async {
+                    guard captureService.isCurrent(context) else {
+                        return
+                    }
                     if isMediaServicesReset {
                         captureService.yieldToActiveSession(
                             .mediaServicesReset
                         )
                         captureService.interruptLocked(
-                            reason: .mediaServicesReset
+                            reason: .mediaServicesReset,
+                            context: context,
+                            rawReason: nil
                         )
                     } else {
-                        captureService.interruptLocked(reason: .unknown)
+                        captureService.interruptLocked(
+                            reason: .unknown,
+                            context: context,
+                            rawReason: nil
+                        )
                     }
                 }
             }
         )
     }
 
-    private func interruptLocked(reason: CaptureInterruptionReason) {
+    private func removeNotifications() {
+        notificationTokens.forEach(
+            NotificationCenter.default.removeObserver
+        )
+        notificationTokens.removeAll()
+    }
+
+    private func interruptLocked(
+        reason: CaptureInterruptionReason,
+        context: NotificationContext? = nil,
+        rawReason: Int? = nil
+    ) {
+        if let context, !isCurrent(context) {
+            recordDiagnostic(
+                "stale_interruption_ignored",
+                interruptionReason: reason,
+                interruptionEnded: false,
+                rawInterruptionReason: rawReason
+            )
+            return
+        }
         guard !interruptionWasIssued else {
             return
         }
         interruptionWasIssued = true
+        lastInterruptionReason = reason
+        recordDiagnostic(
+            "capture_interruption_began",
+            interruptionReason: reason,
+            interruptionEnded: false,
+            rawInterruptionReason: rawReason
+        )
         if let recordingID = activeRecordingID {
             let outputURL = activeRecordings.first {
                 $0.value.recordingID == recordingID
@@ -622,6 +815,72 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
             if session.isRunning {
                 session.stopRunning()
             }
+        }
+    }
+
+    private func endInterruptionLocked(context: NotificationContext) {
+        guard isCurrent(context), interruptionWasIssued else {
+            recordDiagnostic(
+                "stale_interruption_end_ignored",
+                interruptionReason: lastInterruptionReason,
+                interruptionEnded: true
+            )
+            return
+        }
+        let reason = lastInterruptionReason
+        interruptionWasIssued = false
+        recordDiagnostic(
+            "capture_interruption_ended",
+            interruptionReason: reason,
+            interruptionEnded: true
+        )
+        yieldToActiveSession(.interruptionEnded(reason: reason))
+    }
+
+    private func isCurrent(_ context: NotificationContext) -> Bool {
+        activeSessionID == context.sessionID
+            && activeSessionGeneration == context.generation
+    }
+
+    private func recordDiagnostic(
+        _ event: String,
+        isReconfiguring: Bool = false,
+        interruptionReason: CaptureInterruptionReason? = nil,
+        interruptionEnded: Bool? = nil,
+        rawInterruptionReason: Int? = nil
+    ) {
+        CaptureDiagnostics.record(
+            event,
+            lifecycleGeneration: activeSessionGeneration,
+            sessionID: activeSessionID,
+            cameraPosition: currentConfiguration?.position,
+            isRecording: activeRecordingID != nil,
+            isFinalizing: stoppingRecordingID != nil,
+            isReconfiguring: isReconfiguring,
+            interruptionReason: interruptionReason,
+            interruptionEnded: interruptionEnded,
+            rawInterruptionReason: rawInterruptionReason
+        )
+    }
+
+    static func domainInterruptionReason(
+        fromAVFoundationRawValue rawValue: Int?
+    ) -> CaptureInterruptionReason {
+        switch rawValue {
+        case 1:
+            .applicationBackgrounded
+        case 2:
+            .audioDeviceInUseByAnotherClient
+        case 3:
+            .videoDeviceInUseByAnotherClient
+        case 4:
+            .videoDeviceNotAvailableWithMultipleForegroundApps
+        case 5:
+            .videoDeviceNotAvailableDueToSystemPressure
+        case 6:
+            .sensitiveContentMitigationActivated
+        default:
+            .unknown
         }
     }
 
@@ -765,10 +1024,12 @@ extension AVFoundationCaptureService: AVCaptureFileOutputRecordingDelegate {
                 }
                 if self.activeSessionID == recordingContext.sessionID {
                     self.activeSessionID = nil
+                    self.activeSessionGeneration &+= 1
                     self.currentConfiguration = nil
                     self.currentCapabilities = .unavailable
                     self.videoInput = nil
                     self.audioInput = nil
+                    self.removeNotifications()
                 }
                 self.finishEvents(for: recordingContext.sessionID)
             }

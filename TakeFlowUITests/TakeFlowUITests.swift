@@ -381,12 +381,44 @@ final class TakeFlowUITests: XCTestCase {
 
         app.buttons["capture.record"].tap()
         waitForCaptureState(app, containing: "正在录制", timeout: 6)
-        waitForCaptureState(app, containing: "录制已中断", timeout: 4)
 
         let notice = app.descendants(matching: .any)["capture.notice"]
-        XCTAssertTrue(notice.waitForExistence(timeout: 3))
+        XCTAssertTrue(notice.waitForExistence(timeout: 5))
         XCTAssertTrue(notice.label.contains("可恢复片段"))
         XCTAssertFalse(app.buttons["capture.localPreview"].isEnabled)
+        XCTAssertFalse(app.buttons["capture.switchCamera"].isEnabled)
+    }
+
+    @MainActor
+    func testCaptureInterruptionEndOffersExplicitCameraRecovery()
+        throws
+    {
+        let app = launchCaptureApp(
+            extraArguments: ["-ui-testing-capture-interruption-ends"]
+        )
+        createScriptAndOpenCapture(
+            app: app,
+            content: "中断结束后由用户重新准备摄像头"
+        )
+        waitForCaptureState(app, containing: "预览已就绪", timeout: 5)
+
+        app.buttons["capture.record"].tap()
+        waitForCaptureState(app, containing: "正在录制", timeout: 6)
+        waitForCaptureState(
+            app,
+            containing: "请重新准备摄像头",
+            timeout: 6
+        )
+
+        let retry = app.buttons["capture.retry"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 3))
+        XCTAssertEqual(retry.label, "重新准备摄像头")
+        XCTAssertFalse(app.buttons["capture.switchCamera"].isEnabled)
+        retry.tap()
+
+        waitForCaptureState(app, containing: "预览已就绪", timeout: 5)
+        XCTAssertTrue(app.buttons["capture.record"].isEnabled)
+        XCTAssertTrue(app.buttons["capture.switchCamera"].isEnabled)
     }
 
     @MainActor
@@ -421,6 +453,60 @@ final class TakeFlowUITests: XCTestCase {
 
         XCTAssertFalse(switchCamera.isEnabled)
         app.buttons["capture.record"].tap()
+    }
+
+    @MainActor
+    func testCaptureCanRecordSwitchAndRecordAgainWithoutLeaving()
+        throws
+    {
+        let app = launchCaptureApp()
+        createScriptAndOpenCapture(
+            app: app,
+            content: String(repeating: "连续完成两次录制。\n", count: 30)
+        )
+        waitForCaptureState(app, containing: "预览已就绪", timeout: 5)
+
+        let record = app.buttons["capture.record"]
+        let preview = app.buttons["capture.localPreview"]
+        let switchCamera = app.buttons["capture.switchCamera"]
+        XCTAssertEqual(
+            switchCamera.value as? String,
+            "当前为前置摄像头"
+        )
+
+        record.tap()
+        waitForCaptureState(app, containing: "正在录制", timeout: 6)
+        record.tap()
+        waitForCaptureState(app, containing: "录制已完成", timeout: 3)
+
+        XCTAssertTrue(preview.isEnabled)
+        XCTAssertTrue(switchCamera.isEnabled)
+        XCTAssertFalse(
+            app.descendants(matching: .any)["capture.previewScreen"].exists
+        )
+
+        switchCamera.tap()
+        expectation(
+            for: NSPredicate(
+                format: "value == %@",
+                "当前为后置摄像头"
+            ),
+            evaluatedWith: switchCamera
+        )
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(record.isEnabled)
+
+        record.tap()
+        waitForCaptureState(app, containing: "正在录制", timeout: 6)
+        record.tap()
+        waitForCaptureState(app, containing: "录制已完成", timeout: 3)
+
+        XCTAssertTrue(preview.isEnabled)
+        preview.tap()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["capture.previewScreen"]
+                .waitForExistence(timeout: 3)
+        )
     }
 
     @MainActor
@@ -487,11 +573,18 @@ final class TakeFlowUITests: XCTestCase {
         XCUIDevice.shared.press(.home)
         app.activate()
 
-        waitForCaptureState(app, containing: "录制已中断", timeout: 5)
+        waitForCaptureState(
+            app,
+            containing: "请重新准备摄像头",
+            timeout: 5
+        )
         XCTAssertFalse(
             app.descendants(matching: .any)["capture.state"].label
                 .contains("正在录制")
         )
+        XCTAssertFalse(app.buttons["capture.record"].isEnabled)
+        XCTAssertFalse(app.buttons["capture.switchCamera"].isEnabled)
+        XCTAssertTrue(app.buttons["capture.retry"].exists)
     }
 
     @MainActor

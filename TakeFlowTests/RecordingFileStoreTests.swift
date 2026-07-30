@@ -69,6 +69,51 @@ final class RecordingFileStoreTests: XCTestCase {
         )
     }
 
+    func testCompletingSecondRecordingKeepsFirstFileIntact()
+        async throws
+    {
+        let fixture = try makeFixture()
+        let scriptID = UUID()
+        let first = try await fixture.store.createRecording(
+            scriptID: scriptID,
+            orientation: .portrait,
+            resolution: .fullHD1080p
+        )
+        try Data("first-video".utf8).write(to: first.temporaryURL)
+        try await fixture.store.markRecordingStarted(first)
+        let firstCompleted = try await fixture.store.completeRecording(
+            first,
+            duration: 5
+        )
+
+        let second = try await fixture.store.createRecording(
+            scriptID: scriptID,
+            orientation: .portrait,
+            resolution: .fullHD1080p
+        )
+        try Data("second-video".utf8).write(to: second.temporaryURL)
+        try await fixture.store.markRecordingStarted(second)
+        let secondCompleted = try await fixture.store.completeRecording(
+            second,
+            duration: 5
+        )
+
+        XCTAssertNotEqual(firstCompleted.projectID, secondCompleted.projectID)
+        XCTAssertNotEqual(
+            firstCompleted.recordingID,
+            secondCompleted.recordingID
+        )
+        XCTAssertNotEqual(firstCompleted.fileURL, secondCompleted.fileURL)
+        XCTAssertEqual(
+            try Data(contentsOf: firstCompleted.fileURL),
+            Data("first-video".utf8)
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: secondCompleted.fileURL),
+            Data("second-video".utf8)
+        )
+    }
+
     func testInterruptedFileIsRecoverableAfterStoreRecreation()
         async throws
     {

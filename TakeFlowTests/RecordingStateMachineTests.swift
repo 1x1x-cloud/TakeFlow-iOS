@@ -29,6 +29,14 @@ final class RecordingStateMachineTests: XCTestCase {
             machine.state,
             .finished(recordingID: recordingID, fileURL: outputURL)
         )
+        XCTAssertFalse(machine.permitsCameraSwitch())
+
+        try machine.prepareForNextRecording(
+            recordingID: recordingID,
+            generation: machine.generation
+        )
+        XCTAssertEqual(machine.state, .ready)
+        XCTAssertTrue(machine.permitsCameraSwitch())
     }
 
     func testCannotStartBeforeReady() {
@@ -72,6 +80,60 @@ final class RecordingStateMachineTests: XCTestCase {
         XCTAssertFalse(machine.permitsCameraSwitch())
     }
 
+    func testCameraSwitchUsesExplicitConfigurationState() throws {
+        var machine = try makeReadyMachine()
+
+        try machine.beginCameraSwitch()
+
+        XCTAssertEqual(machine.state, .configuring)
+        XCTAssertFalse(machine.permitsCameraSwitch())
+        XCTAssertThrowsError(try machine.beginCameraSwitch()) {
+            XCTAssertEqual($0 as? CaptureError, .invalidTransition)
+        }
+
+        try machine.markReady()
+        XCTAssertEqual(machine.state, .ready)
+    }
+
+    func testInterruptedAndFailedStatesCannotSwitchCamera() throws {
+        var interrupted = try makeReadyMachine()
+        XCTAssertTrue(
+            interrupted.interrupt(
+                recordingID: nil,
+                reason: .cameraUnavailable
+            )
+        )
+        XCTAssertFalse(interrupted.permitsCameraSwitch())
+
+        var failed = try makeReadyMachine()
+        failed.fail(.cameraUnavailable)
+        XCTAssertFalse(failed.permitsCameraSwitch())
+    }
+
+    func testStaleCompletionCannotPrepareNextRecording() throws {
+        let recordingID = UUID()
+        var machine = try makeRecordingMachine(recordingID: recordingID)
+        _ = try machine.beginStopping(recordingID: recordingID)
+        let generation = machine.generation
+        let outputURL = URL(fileURLWithPath: "/tmp/completed.mov")
+        try machine.finish(
+            recordingID: recordingID,
+            fileURL: outputURL,
+            generation: generation
+        )
+        machine.reset()
+
+        XCTAssertThrowsError(
+            try machine.prepareForNextRecording(
+                recordingID: recordingID,
+                generation: generation
+            )
+        ) {
+            XCTAssertEqual($0 as? CaptureError, .staleCallback)
+        }
+        XCTAssertEqual(machine.state, .idle)
+    }
+
     func testInterruptionWinsConcurrentStopOnlyOnce() throws {
         let recordingID = UUID()
         var machine = try makeRecordingMachine(recordingID: recordingID)
@@ -88,6 +150,204 @@ final class RecordingStateMachineTests: XCTestCase {
                 recordingID: recordingID,
                 reason: .applicationBackgrounded
             )
+        )
+    }
+
+    func testIdleInterruptionRequiresExplicitRecoveryAfterItEnds()
+        throws
+    {
+        var machine = try makeReadyMachine()
+
+        XCTAssertTrue(
+            machine.interrupt(
+                recordingID: nil,
+                reason: .videoDeviceInUseByAnotherClient,
+                source: .captureSession
+            )
+        )
+        XCTAssertFalse(machine.permitsRecovery())
+        XCTAssertTrue(
+            machine.endInterruption(source: .captureSession)
+        )
+        XCTAssertEqual(
+            machine.state,
+            .recoveryRequired(
+                reason: .videoDeviceInUseByAnotherClient
+            )
+        )
+        XCTAssertTrue(machine.permitsRecovery())
+        XCTAssertFalse(machine.permitsCameraSwitch())
+    }
+
+    func testRecordingInterruptionWaitsForFileFinalizationAndAllSources()
+        throws
+    {
+        let recordingID = UUID()
+        var machine = try makeRecordingMachine(recordingID: recordingID)
+
+        XCTAssertTrue(
+            machine.interrupt(
+                recordingID: recordingID,
+                reason: .audioDeviceInUseByAnotherClient,
+                source: .captureSession
+            )
+        )
+        XCTAssertTrue(
+            machine.interrupt(
+                recordingID: recordingID,
+                reason: .audioSessionInterrupted,
+                source: .audioSession
+            )
+        )
+        XCTAssertFalse(
+            machine.endInterruption(source: .captureSession)
+        )
+        try machine.markInterruptedRecordingFinalized(
+            recordingID: recordingID
+        )
+        XCTAssertFalse(machine.permitsRecovery())
+
+        XCTAssertTrue(machine.endInterruption(source: .audioSession))
+        XCTAssertEqual(
+            machine.state,
+            .recoveryRequired(
+                reason: .audioDeviceInUseByAnotherClient
+            )
+        )
+    }
+
+    func testLateSecondInterruptionRevokesRecoveryUntilItAlsoEnds()
+        throws
+    {
+        var machine = try makeReadyMachine()
+
+        XCTAssertTrue(
+            machine.interrupt(
+                recordingID: nil,
+                reason: .audioSessionInterrupted,
+                source: .audioSession
+            )
+        )
+        XCTAssertTrue(machine.endInterruption(source: .audioSession))
+        XCTAssertTrue(machine.permitsRecovery())
+
+        XCTAssertTrue(
+            machine.interrupt(
+                recordingID: nil,
+                reason: .videoDeviceInUseByAnotherClient,
+                source: .captureSession
+            )
+        )
+        XCTAssertFalse(machine.permitsRecovery())
+        XCTAssertEqual(
+            machine.state,
+            .interrupted(
+                recordingID: nil,
+                reason: .videoDeviceInUseByAnotherClient
+            )
+        )
+
+        XCTAssertTrue(machine.endInterruption(source: .captureSession))
+        XCTAssertEqual(
+            machine.state,
+            .recoveryRequired(
+                reason: .videoDeviceInUseByAnotherClient
+            )
+        )
+    }
+
+    func testInterruptionEndArrivingBeforeBeginIsPairedWithinLifecycle()
+        throws
+    {
+        var machine = try makeReadyMachine()
+
+        XCTAssertFalse(
+            machine.endInterruption(source: .applicationLifecycle)
+        )
+        XCTAssertTrue(
+            machine.interrupt(
+                recordingID: nil,
+                reason: .applicationBackgrounded,
+                source: .applicationLifecycle
+            )
+        )
+        XCTAssertEqual(
+            machine.state,
+            .recoveryRequired(reason: .applicationBackgrounded)
+        )
+    }
+
+    func testRecordingStillFinalizesWhenEndArrivesBeforeBegin()
+        throws
+    {
+        let recordingID = UUID()
+        var machine = try makeRecordingMachine(recordingID: recordingID)
+
+        XCTAssertFalse(
+            machine.endInterruption(source: .captureSession)
+        )
+        XCTAssertTrue(
+            machine.interrupt(
+                recordingID: recordingID,
+                reason: .videoDeviceInUseByAnotherClient,
+                source: .captureSession
+            )
+        )
+        XCTAssertFalse(machine.permitsRecovery())
+
+        try machine.markInterruptedRecordingFinalized(
+            recordingID: recordingID
+        )
+        XCTAssertEqual(
+            machine.state,
+            .recoveryRequired(
+                reason: .videoDeviceInUseByAnotherClient
+            )
+        )
+    }
+
+    func testAVFoundationInterruptionReasonsRemainDistinguishable() {
+        XCTAssertEqual(
+            AVFoundationCaptureService.domainInterruptionReason(
+                fromAVFoundationRawValue: 1
+            ),
+            .applicationBackgrounded
+        )
+        XCTAssertEqual(
+            AVFoundationCaptureService.domainInterruptionReason(
+                fromAVFoundationRawValue: 2
+            ),
+            .audioDeviceInUseByAnotherClient
+        )
+        XCTAssertEqual(
+            AVFoundationCaptureService.domainInterruptionReason(
+                fromAVFoundationRawValue: 3
+            ),
+            .videoDeviceInUseByAnotherClient
+        )
+        XCTAssertEqual(
+            AVFoundationCaptureService.domainInterruptionReason(
+                fromAVFoundationRawValue: 4
+            ),
+            .videoDeviceNotAvailableWithMultipleForegroundApps
+        )
+        XCTAssertEqual(
+            AVFoundationCaptureService.domainInterruptionReason(
+                fromAVFoundationRawValue: 5
+            ),
+            .videoDeviceNotAvailableDueToSystemPressure
+        )
+        XCTAssertEqual(
+            AVFoundationCaptureService.domainInterruptionReason(
+                fromAVFoundationRawValue: 6
+            ),
+            .sensitiveContentMitigationActivated
+        )
+        XCTAssertEqual(
+            AVFoundationCaptureService.domainInterruptionReason(
+                fromAVFoundationRawValue: 999
+            ),
+            .unknown
         )
     }
 

@@ -96,7 +96,7 @@ struct CameraRecordingView: View {
             TeleprompterStrings.errorTitle,
             isPresented: errorBinding
         ) {
-            if !recordingViewModel.state.isActivelyRecording {
+            if recordingViewModel.canRetryPreparation {
                 Button(CameraRecordingStrings.retry) {
                     Task {
                         await recordingViewModel.retryPreparation()
@@ -261,6 +261,11 @@ struct CameraRecordingView: View {
             }
             .disabled(!recordingViewModel.canSwitchCamera)
             .accessibilityLabel(CameraRecordingStrings.switchCamera)
+            .accessibilityValue(
+                recordingViewModel.configuration?.position == .back
+                    ? CameraRecordingStrings.backCameraActive
+                    : CameraRecordingStrings.frontCameraActive
+            )
             .accessibilityIdentifier("capture.switchCamera")
         }
         .foregroundStyle(.white)
@@ -327,7 +332,7 @@ struct CameraRecordingView: View {
         }
 
         if recordingViewModel.canRetryPreparation {
-            Button(CameraRecordingStrings.retry) {
+            Button(retryButtonTitle) {
                 Task {
                     await recordingViewModel.retryPreparation()
                 }
@@ -579,7 +584,9 @@ struct CameraRecordingView: View {
         case .configuring:
             CameraRecordingStrings.preparing
         case .ready:
-            CameraRecordingStrings.ready
+            recordingViewModel.completedRecording == nil
+                ? CameraRecordingStrings.ready
+                : CameraRecordingStrings.completedAndReady
         case .starting(let seconds):
             "将在 \(seconds) 秒后开始录制"
         case .recording:
@@ -588,11 +595,22 @@ struct CameraRecordingView: View {
             "正在安全完成录制"
         case .finished:
             "录制已完成"
-        case .interrupted:
-            CameraRecordingStrings.interrupted
+        case .interrupted(let recordingID, _):
+            recordingID == nil
+                ? CameraRecordingStrings.cameraInterrupted
+                : CameraRecordingStrings.interrupted
+        case .recoveryRequired:
+            CameraRecordingStrings.interruptionEnded
         case .failed:
             CameraRecordingStrings.unavailable
         }
+    }
+
+    private var retryButtonTitle: String {
+        if case .recoveryRequired = recordingViewModel.state {
+            return CameraRecordingStrings.prepareCameraAgain
+        }
+        return CameraRecordingStrings.retry
     }
 
     private func qualityTitle(

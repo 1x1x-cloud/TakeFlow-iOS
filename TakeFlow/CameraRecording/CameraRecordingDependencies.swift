@@ -122,9 +122,12 @@ enum FakeCaptureMode: Equatable, Sendable {
     case interrupted
     case lowStorage
     case preparationTimesOutOnce
+    case interruptionEnds
 
     init(arguments: [String]) {
-        if arguments.contains("-ui-testing-capture-timeout-once") {
+        if arguments.contains("-ui-testing-capture-interruption-ends") {
+            self = .interruptionEnds
+        } else if arguments.contains("-ui-testing-capture-timeout-once") {
             self = .preparationTimesOutOnce
         } else if arguments.contains("-ui-testing-camera-denied") {
             self = .cameraDenied
@@ -286,6 +289,34 @@ actor FakeCaptureSessionService: CaptureSessionServicing {
             preferredResolution:
                 configuration?.format.resolution ?? .fullHD1080p
         )
+        guard let configuration else {
+            throw CaptureError.cameraUnavailable
+        }
+        continuations[sessionID]?.yield(
+            .sessionReady(
+                source: nil,
+                configuration: configuration,
+                capabilities: CaptureCapabilities(
+                    availableFormats: [
+                        CaptureFormatOption(
+                            resolution: .fullHD1080p,
+                            framesPerSecond: 30,
+                            codec: .h264
+                        ),
+                        CaptureFormatOption(
+                            resolution: .ultraHD4K,
+                            framesPerSecond: 30,
+                            codec: .hevc
+                        )
+                    ],
+                    supportsFocusPoint: true,
+                    supportsExposurePoint: true,
+                    supportsFocusLock: true,
+                    supportsExposureLock: true,
+                    supportsVideoStabilization: true
+                )
+            )
+        )
     }
 
     func startRecording(
@@ -310,7 +341,7 @@ actor FakeCaptureSessionService: CaptureSessionServicing {
             .duration(recordingID: recordingID, seconds: 0)
         )
 
-        if mode == .interrupted {
+        if mode == .interrupted || mode == .interruptionEnds {
             Task {
                 try? await Task.sleep(for: .seconds(3))
                 interruptForUITest(recordingID: recordingID)
@@ -394,6 +425,11 @@ actor FakeCaptureSessionService: CaptureSessionServicing {
                 duration: 1
             )
         )
+        if mode == .interruptionEnds {
+            continuations[activeRecording.sessionID]?.yield(
+                .interruptionEnded(reason: .cameraUnavailable)
+            )
+        }
     }
 }
 
