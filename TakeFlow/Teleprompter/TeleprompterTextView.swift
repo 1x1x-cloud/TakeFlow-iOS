@@ -8,7 +8,7 @@ struct TeleprompterTextView: UIViewRepresentable {
     let anchor: ScriptReadingAnchor
     let layoutRevision: Int
     let foregroundColor: UIColor
-    let onTapped: () -> Void
+    let onTapped: (_ pointInWindow: CGPoint) -> Void
     let onDragStarted: () -> Void
     let onDragChanged: (_ offset: Double, _ characterOffset: Int) -> Void
     let onDragEnded: (_ offset: Double, _ characterOffset: Int) -> Void
@@ -133,8 +133,17 @@ struct TeleprompterTextView: UIViewRepresentable {
             self.parent = parent
         }
 
-        @objc func handleTap() {
-            parent.onTapped()
+        @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
+            guard
+                let collectionView,
+                let window = collectionView.window
+            else {
+                return
+            }
+            let localPoint = recognizer.location(in: collectionView)
+            parent.onTapped(
+                collectionView.convert(localPoint, to: window)
+            )
         }
 
         @objc private func handleMemoryWarning() {

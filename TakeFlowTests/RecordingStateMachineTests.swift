@@ -16,7 +16,12 @@ final class RecordingStateMachineTests: XCTestCase {
         try machine.beginCountdown(seconds: 3)
         XCTAssertEqual(machine.state, .starting(countdownRemaining: 3))
         try machine.updateCountdown(remaining: 2)
-        try machine.markRecording(recordingID: recordingID)
+        try machine.markRecordingStartRequested(recordingID: recordingID)
+        XCTAssertEqual(
+            machine.state,
+            .awaitingRecordingStart(recordingID: recordingID)
+        )
+        try machine.confirmRecordingStarted(recordingID: recordingID)
         XCTAssertEqual(machine.state, .recording(recordingID: recordingID))
         XCTAssertTrue(try machine.beginStopping(recordingID: recordingID))
         try machine.finish(
@@ -63,6 +68,59 @@ final class RecordingStateMachineTests: XCTestCase {
         XCTAssertThrowsError(try machine.beginCountdown(seconds: 3)) {
             XCTAssertEqual($0 as? CaptureError, .invalidTransition)
         }
+    }
+
+    func testStartRequestWaitsForExplicitDelegateConfirmation() throws {
+        let recordingID = UUID()
+        var machine = try makeReadyMachine()
+        try machine.beginCountdown(seconds: 1)
+
+        try machine.markRecordingStartRequested(recordingID: recordingID)
+
+        XCTAssertEqual(
+            machine.state,
+            .awaitingRecordingStart(recordingID: recordingID)
+        )
+        XCTAssertFalse(machine.state.isActivelyRecording)
+        XCTAssertTrue(machine.state.hasPendingOrActiveRecording)
+        try machine.confirmRecordingStarted(recordingID: recordingID)
+        XCTAssertEqual(
+            machine.state,
+            .recording(recordingID: recordingID)
+        )
+    }
+
+    func testPendingStartCanBeStoppedOrInterruptedSafely() throws {
+        let recordingID = UUID()
+        var stopping = try makeReadyMachine()
+        try stopping.beginCountdown(seconds: 1)
+        try stopping.markRecordingStartRequested(recordingID: recordingID)
+        XCTAssertTrue(
+            try stopping.beginStopping(recordingID: recordingID)
+        )
+        XCTAssertEqual(
+            stopping.state,
+            .stopping(recordingID: recordingID)
+        )
+
+        var interrupted = try makeReadyMachine()
+        try interrupted.beginCountdown(seconds: 1)
+        try interrupted.markRecordingStartRequested(
+            recordingID: recordingID
+        )
+        XCTAssertTrue(
+            interrupted.interrupt(
+                recordingID: recordingID,
+                reason: .applicationBackgrounded
+            )
+        )
+        XCTAssertEqual(
+            interrupted.state,
+            .interrupted(
+                recordingID: recordingID,
+                reason: .applicationBackgrounded
+            )
+        )
     }
 
     func testRepeatedStopCompletesOnlyOnce() throws {
@@ -375,7 +433,8 @@ final class RecordingStateMachineTests: XCTestCase {
         try machine.beginConfiguration()
         try machine.markReady()
         try machine.beginCountdown(seconds: 1)
-        try machine.markRecording(recordingID: recordingID)
+        try machine.markRecordingStartRequested(recordingID: recordingID)
+        try machine.confirmRecordingStarted(recordingID: recordingID)
         _ = try machine.beginStopping(recordingID: recordingID)
 
         XCTAssertThrowsError(
@@ -450,7 +509,8 @@ final class RecordingStateMachineTests: XCTestCase {
     ) throws -> RecordingStateMachine {
         var machine = try makeReadyMachine()
         try machine.beginCountdown(seconds: 1)
-        try machine.markRecording(recordingID: recordingID)
+        try machine.markRecordingStartRequested(recordingID: recordingID)
+        try machine.confirmRecordingStarted(recordingID: recordingID)
         return machine
     }
 }

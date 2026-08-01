@@ -959,10 +959,633 @@ final class CameraRecordingViewModelTests: XCTestCase {
         await fixture.viewModel.prepare()
         try await waitUntil { fixture.viewModel.state == .ready }
 
-        fixture.viewModel.focus(at: NormalizedCapturePoint(x: 0.5, y: 0.5))
-        try await waitUntil {
+        let didApply = await fixture.viewModel.focus(
+            at: NormalizedCapturePoint(x: 0.5, y: 0.5)
+        )
+
+        XCTAssertFalse(didApply)
+        XCTAssertTrue(
             fixture.viewModel.errorMessage?.contains("不支持点击对焦")
                 == true
+        )
+    }
+
+    func testReadyAndRecordingFocusForwardExactDevicePoints()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let fixture = makeFixture(capture: capture)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+
+        let nearPoint = NormalizedCapturePoint(x: 0.22, y: 0.73)
+        let readyApplied = await fixture.viewModel.focus(at: nearPoint)
+        XCTAssertTrue(readyApplied)
+
+        fixture.viewModel.startRecording()
+        _ = try await waitForRecordingID(
+            viewModel: fixture.viewModel
+        )
+        let farPoint = NormalizedCapturePoint(x: 0.81, y: 0.19)
+        let recordingApplied = await fixture.viewModel.focus(at: farPoint)
+        XCTAssertTrue(recordingApplied)
+
+        let requests = await capture.focusRequests
+        XCTAssertEqual(requests, [nearPoint, farPoint])
+    }
+
+    func testFocusIsRejectedOutsideReadyAndRecordingStates()
+        async throws
+    {
+        let idleCapture = TestCaptureSession()
+        let idle = makeFixture(capture: idleCapture).viewModel
+        let idleApplied = await idle.focus(
+            at: NormalizedCapturePoint(x: 0.5, y: 0.5)
+        )
+        XCTAssertFalse(idleApplied)
+
+        let configuringCapture = TestCaptureSession()
+        await configuringCapture.setSuspendsPreview(true)
+        let configuring = makeFixture(capture: configuringCapture).viewModel
+        let preparation = Task {
+            await configuring.prepare()
+        }
+        try await waitUntil { configuring.state == .configuring }
+        let configuringApplied = await configuring.focus(
+            at: NormalizedCapturePoint(x: 0.5, y: 0.5)
+        )
+        XCTAssertFalse(configuringApplied)
+        await configuringCapture.resumeSuspendedPreviews()
+        await preparation.value
+
+        let stoppingCapture = TestCaptureSession()
+        let stopping = makeFixture(capture: stoppingCapture).viewModel
+        await stopping.prepare()
+        try await waitUntil { stopping.state == .ready }
+        stopping.startRecording()
+        _ = try await waitForRecordingID(viewModel: stopping)
+        stopping.stopRecording()
+        try await waitUntil {
+            if case .stopping = stopping.state {
+                return true
+            }
+            return false
+        }
+        let stoppingApplied = await stopping.focus(
+            at: NormalizedCapturePoint(x: 0.5, y: 0.5)
+        )
+        XCTAssertFalse(stoppingApplied)
+
+        let interruptedCapture = TestCaptureSession()
+        let interrupted = makeFixture(
+            capture: interruptedCapture
+        ).viewModel
+        await interrupted.prepare()
+        try await waitUntil { interrupted.state == .ready }
+        await interruptedCapture.interruptCurrentSession(
+            reason: .videoDeviceInUseByAnotherClient
+        )
+        try await waitUntil {
+            if case .interrupted = interrupted.state {
+                return true
+            }
+            return false
+        }
+        let interruptedApplied = await interrupted.focus(
+            at: NormalizedCapturePoint(x: 0.5, y: 0.5)
+        )
+        XCTAssertFalse(interruptedApplied)
+
+        let failed = makeFixture(
+            permissions: TestCapturePermissions(
+                camera: .denied,
+                microphone: .authorized
+            )
+        ).viewModel
+        await failed.prepare()
+        let failedApplied = await failed.focus(
+            at: NormalizedCapturePoint(x: 0.5, y: 0.5)
+        )
+        XCTAssertFalse(failedApplied)
+
+        let closedCapture = TestCaptureSession()
+        let closed = makeFixture(capture: closedCapture).viewModel
+        await closed.prepare()
+        try await waitUntil { closed.state == .ready }
+        await closed.viewDidDisappear()
+        let closedApplied = await closed.focus(
+            at: NormalizedCapturePoint(x: 0.5, y: 0.5)
+        )
+        XCTAssertFalse(closedApplied)
+    }
+
+    func testFocusLockUsesDeviceOperationAndUpdatesOnlyAfterSuccess()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        await capture.setSuspendsFocusLock(true)
+        let fixture = makeFixture(capture: capture)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+
+        let operation = Task {
+            await fixture.viewModel.toggleFocusAndExposureLock()
+        }
+        try await waitUntil { await capture.lockRequests == [true] }
+
+        XCTAssertFalse(fixture.viewModel.isFocusAndExposureLocked)
+        XCTAssertFalse(fixture.viewModel.canToggleFocusAndExposureLock)
+
+        await capture.resumeSuspendedFocusLocks()
+        await operation.value
+
+        XCTAssertTrue(fixture.viewModel.isFocusAndExposureLocked)
+        XCTAssertEqual(
+            fixture.viewModel.focusAndExposureNoticeMessage,
+            CameraRecordingStrings.focusAndExposureLocked
+        )
+    }
+
+    func testFocusLockFailureNeverShowsFalseLockedState()
+        async throws
+    {
+        let capture = TestCaptureSession(lockError: .focusUnsupported)
+        let fixture = makeFixture(capture: capture)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+
+        await fixture.viewModel.toggleFocusAndExposureLock()
+
+        XCTAssertFalse(fixture.viewModel.isFocusAndExposureLocked)
+        XCTAssertNotNil(fixture.viewModel.errorMessage)
+    }
+
+    func testLateFocusLockCompletionCannotChangeClosedLifecycle()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        await capture.setSuspendsFocusLock(true)
+        let fixture = makeFixture(capture: capture)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+
+        let operation = Task {
+            await fixture.viewModel.toggleFocusAndExposureLock()
+        }
+        try await waitUntil { await capture.lockRequests == [true] }
+        await fixture.viewModel.viewDidDisappear()
+        await capture.resumeSuspendedFocusLocks()
+        await operation.value
+
+        XCTAssertFalse(fixture.viewModel.isFocusAndExposureLocked)
+        XCTAssertFalse(fixture.viewModel.canAdjustFocusAndExposure)
+        XCTAssertNil(fixture.viewModel.focusAndExposureNoticeMessage)
+    }
+
+    func testFocusUnlockRestoresContinuousDeviceModes()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let fixture = makeFixture(capture: capture)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+
+        await fixture.viewModel.toggleFocusAndExposureLock()
+        await fixture.viewModel.toggleFocusAndExposureLock()
+
+        XCTAssertFalse(fixture.viewModel.isFocusAndExposureLocked)
+        let requests = await capture.lockRequests
+        XCTAssertEqual(requests, [true, false])
+    }
+
+    func testCameraSwitchResetsFocusLockForNewDevice()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let fixture = makeFixture(capture: capture)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        await fixture.viewModel.toggleFocusAndExposureLock()
+        XCTAssertTrue(fixture.viewModel.isFocusAndExposureLocked)
+        XCTAssertEqual(
+            fixture.viewModel.focusAndExposureNoticeMessage,
+            CameraRecordingStrings.focusAndExposureLocked
+        )
+        let feedbackGeneration =
+            fixture.viewModel.focusAndExposureFeedbackGeneration
+        await capture.setSuspendsCameraSwitch(true)
+
+        fixture.viewModel.switchCamera()
+        XCTAssertEqual(fixture.viewModel.state, .configuring)
+        XCTAssertFalse(fixture.viewModel.isFocusAndExposureLocked)
+        XCTAssertNil(fixture.viewModel.focusAndExposureNoticeMessage)
+        XCTAssertGreaterThan(
+            fixture.viewModel.focusAndExposureFeedbackGeneration,
+            feedbackGeneration
+        )
+
+        await capture.resumeSuspendedCameraSwitches()
+        try await waitUntil {
+            fixture.viewModel.state == .ready
+                && fixture.viewModel.configuration?.position == .back
+        }
+
+        XCTAssertFalse(fixture.viewModel.isFocusAndExposureLocked)
+        XCTAssertNil(fixture.viewModel.focusAndExposureNoticeMessage)
+        XCTAssertTrue(fixture.viewModel.canToggleFocusAndExposureLock)
+    }
+
+    func testLateOldCameraLockCannotRestoreFeedbackAfterSwitch()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        await capture.setSuspendsFocusLock(true)
+        await capture.setSuspendsCameraSwitch(true)
+        let fixture = makeFixture(capture: capture)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+
+        let oldLock = Task {
+            await fixture.viewModel.toggleFocusAndExposureLock()
+        }
+        try await waitUntil { await capture.lockRequests == [true] }
+        fixture.viewModel.switchCamera()
+        XCTAssertEqual(fixture.viewModel.state, .configuring)
+
+        await capture.resumeSuspendedFocusLocks()
+        await oldLock.value
+        XCTAssertFalse(fixture.viewModel.isFocusAndExposureLocked)
+        XCTAssertNil(fixture.viewModel.focusAndExposureNoticeMessage)
+
+        await capture.resumeSuspendedCameraSwitches()
+        try await waitUntil {
+            fixture.viewModel.state == .ready
+                && fixture.viewModel.configuration?.position == .back
+        }
+        XCTAssertFalse(fixture.viewModel.isFocusAndExposureLocked)
+        XCTAssertNil(fixture.viewModel.focusAndExposureNoticeMessage)
+    }
+
+    func testResolutionSwitchClearsFocusFeedback()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let fixture = makeFixture(capture: capture)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        await fixture.viewModel.toggleFocusAndExposureLock()
+        XCTAssertNotNil(
+            fixture.viewModel.focusAndExposureNoticeMessage
+        )
+
+        fixture.viewModel.selectResolution(.ultraHD4K)
+
+        XCTAssertFalse(fixture.viewModel.isFocusAndExposureLocked)
+        XCTAssertNil(fixture.viewModel.focusAndExposureNoticeMessage)
+    }
+
+    func testInterruptionAndNewLifecycleDoNotRetainFocusFeedback()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let fixture = makeFixture(capture: capture)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        await fixture.viewModel.toggleFocusAndExposureLock()
+
+        await capture.interruptCurrentSession(
+            reason: .videoDeviceInUseByAnotherClient
+        )
+        try await waitUntil {
+            if case .interrupted = fixture.viewModel.state {
+                return true
+            }
+            return false
+        }
+        XCTAssertFalse(fixture.viewModel.isFocusAndExposureLocked)
+        XCTAssertNil(fixture.viewModel.focusAndExposureNoticeMessage)
+        XCTAssertNotNil(fixture.viewModel.noticeMessage)
+
+        await fixture.viewModel.viewDidDisappear()
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+
+        XCTAssertFalse(fixture.viewModel.isFocusAndExposureLocked)
+        XCTAssertNil(fixture.viewModel.focusAndExposureNoticeMessage)
+    }
+
+    func testUnsupportedPointAndLockCapabilitiesAreDisabled()
+        async throws
+    {
+        let capabilities = CaptureCapabilities(
+            availableFormats: [
+                CaptureFormatOption(
+                    resolution: .fullHD1080p,
+                    framesPerSecond: 30,
+                    codec: .h264
+                )
+            ],
+            supportsFocusPoint: false,
+            supportsExposurePoint: false,
+            supportsFocusLock: false,
+            supportsExposureLock: false,
+            supportsContinuousFocus: false,
+            supportsContinuousExposure: false,
+            supportsVideoStabilization: true
+        )
+        let capture = TestCaptureSession(capabilities: capabilities)
+        let fixture = makeFixture(capture: capture)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+
+        XCTAssertFalse(fixture.viewModel.canAdjustFocusAndExposure)
+        XCTAssertFalse(fixture.viewModel.canToggleFocusAndExposureLock)
+        let didApply = await fixture.viewModel.focus(
+            at: NormalizedCapturePoint(x: 0.5, y: 0.5)
+        )
+        XCTAssertFalse(didApply)
+        await fixture.viewModel.toggleFocusAndExposureLock()
+
+        let focusRequests = await capture.focusRequests
+        let lockRequests = await capture.lockRequests
+        XCTAssertEqual(focusRequests, [])
+        XCTAssertEqual(lockRequests, [])
+    }
+
+    func testExposureOnlyDeviceStillAppliesSupportedAdjustment()
+        async throws
+    {
+        let capabilities = CaptureCapabilities(
+            availableFormats: [
+                CaptureFormatOption(
+                    resolution: .fullHD1080p,
+                    framesPerSecond: 30,
+                    codec: .h264
+                )
+            ],
+            supportsFocusPoint: false,
+            supportsExposurePoint: true,
+            supportsFocusLock: false,
+            supportsExposureLock: true,
+            supportsContinuousFocus: false,
+            supportsContinuousExposure: true,
+            supportsVideoStabilization: true
+        )
+        let capture = TestCaptureSession(capabilities: capabilities)
+        let fixture = makeFixture(capture: capture)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+
+        let didApply = await fixture.viewModel.focus(
+            at: NormalizedCapturePoint(x: 0.35, y: 0.65)
+        )
+
+        XCTAssertTrue(didApply)
+        XCTAssertEqual(
+            fixture.viewModel.focusAndExposureNoticeMessage,
+            CameraRecordingStrings.exposureSet
+        )
+        XCTAssertFalse(fixture.viewModel.canToggleFocusAndExposureLock)
+    }
+
+    func testStartRequestDoesNotAdvanceDurationBeforeDelegateConfirmation()
+        async throws
+    {
+        let capture = TestCaptureSession(
+            finishesWhenStopped: true,
+            automaticallyStartsRecording: false
+        )
+        let fixture = makeFixture(capture: capture)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+
+        fixture.viewModel.startRecording()
+        try await waitUntil {
+            if case .awaitingRecordingStart =
+                fixture.viewModel.state {
+                return true
+            }
+            return false
+        }
+        try await Task.sleep(for: .milliseconds(40))
+
+        XCTAssertEqual(fixture.viewModel.recordingDuration, 0)
+        let markStartedCount = await fixture.files.markStartedCount
+        XCTAssertEqual(markStartedCount, 0)
+        await fixture.viewModel.viewDidDisappear()
+    }
+
+    func testDelegateConfirmationBeginsRecordingAtZero() async throws {
+        let capture = TestCaptureSession(
+            finishesWhenStopped: true,
+            automaticallyStartsRecording: false
+        )
+        let fixture = makeFixture(capture: capture)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRequestedRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        await capture.emitRecordingStarted(recordingID: recordingID)
+
+        try await waitUntil {
+            fixture.viewModel.state
+                == .recording(recordingID: recordingID)
+        }
+        XCTAssertEqual(fixture.viewModel.recordingDuration, 0)
+        let markStartedCount = await fixture.files.markStartedCount
+        XCTAssertEqual(markStartedCount, 1)
+        await fixture.viewModel.viewDidDisappear()
+    }
+
+    func testDuplicateDelegateStartCannotRestartRecordingBoundary()
+        async throws
+    {
+        let capture = TestCaptureSession(
+            finishesWhenStopped: true,
+            automaticallyStartsRecording: false
+        )
+        let fixture = makeFixture(capture: capture)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRequestedRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        await capture.emitRecordingStarted(recordingID: recordingID)
+        await capture.emitRecordingStarted(recordingID: recordingID)
+
+        try await waitUntil {
+            fixture.viewModel.state
+                == .recording(recordingID: recordingID)
+        }
+        try await Task.sleep(for: .milliseconds(20))
+        let markStartedCount = await fixture.files.markStartedCount
+        XCTAssertEqual(markStartedCount, 1)
+        await fixture.viewModel.viewDidDisappear()
+    }
+
+    func testFinalMediaDurationOverridesLiveEstimate() async throws {
+        let capture = TestCaptureSession()
+        let fixture = makeFixture(capture: capture)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRecordingID(
+            viewModel: fixture.viewModel
+        )
+        await capture.emitDuration(
+            recordingID: recordingID,
+            seconds: 0.75
+        )
+        try await waitUntil {
+            fixture.viewModel.recordingDuration == 0.75
+        }
+        fixture.viewModel.stopRecording()
+        try await waitUntil {
+            await capture.stopRecordingCount == 1
+        }
+        await capture.finish(recordingID: recordingID, duration: 12.4)
+
+        try await waitUntil { fixture.viewModel.state == .ready }
+
+        XCTAssertEqual(fixture.viewModel.recordingDuration, 12.4)
+        XCTAssertEqual(
+            fixture.viewModel.completedRecording?.duration,
+            12.4
+        )
+    }
+
+    func testRecordingStartTimeoutFailsWithoutEnteringRecording()
+        async throws
+    {
+        let capture = TestCaptureSession(
+            finishesWhenStopped: true,
+            automaticallyStartsRecording: false
+        )
+        let fixture = makeFixture(
+            capture: capture,
+            recordingStartTimeout: .milliseconds(30)
+        )
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+
+        fixture.viewModel.startRecording()
+
+        try await waitUntil {
+            fixture.viewModel.state
+                == .failed(.recordingStartTimedOut)
+        }
+        XCTAssertEqual(fixture.viewModel.recordingDuration, 0)
+        let stopRecordingCount = await capture.stopRecordingCount
+        XCTAssertEqual(stopRecordingCount, 1)
+        try await waitUntil {
+            await fixture.files.deletedProjectIDs.count == 1
+        }
+    }
+
+    func testBackgroundBeforeDelegateStartNeverEntersRecording()
+        async throws
+    {
+        let capture = TestCaptureSession(
+            finishesWhenStopped: true,
+            automaticallyStartsRecording: false
+        )
+        let fixture = makeFixture(capture: capture)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRequestedRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        fixture.viewModel.sceneDidEnterBackground()
+        try await waitUntil {
+            await fixture.files.deletedProjectIDs.count == 1
+        }
+        let backgroundCount = await capture.backgroundCount
+        XCTAssertEqual(backgroundCount, 1)
+
+        await capture.emitRecordingStarted(recordingID: recordingID)
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertNotEqual(
+            fixture.viewModel.state,
+            .recording(recordingID: recordingID)
+        )
+    }
+
+    func testExitBeforeDelegateStartCleansPendingWithoutRecording()
+        async throws
+    {
+        let capture = TestCaptureSession(
+            finishesWhenStopped: true,
+            automaticallyStartsRecording: false
+        )
+        let fixture = makeFixture(capture: capture)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        _ = try await waitForRequestedRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        await fixture.viewModel.viewDidDisappear()
+
+        try await waitUntil {
+            await fixture.files.deletedProjectIDs.count == 1
+        }
+        XCTAssertFalse(fixture.viewModel.state.isActivelyRecording)
+        let markStartedCount = await fixture.files.markStartedCount
+        let deletedProjectCount =
+            await fixture.files.deletedProjectIDs.count
+        XCTAssertEqual(markStartedCount, 0)
+        XCTAssertEqual(deletedProjectCount, 1)
+    }
+
+    func testLateStartFromOldLifecycleCannotConfirmNewRecording()
+        async throws
+    {
+        let capture = TestCaptureSession(
+            finishesWhenStopped: true,
+            automaticallyStartsRecording: false
+        )
+        let fixture = makeFixture(capture: capture)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        let configuredSessionIDs = await capture.configuredSessionIDs
+        let firstSessionID = try XCTUnwrap(configuredSessionIDs.first)
+        fixture.viewModel.startRecording()
+        let firstRecordingID = try await waitForRequestedRecordingID(
+            viewModel: fixture.viewModel
+        )
+        await fixture.viewModel.viewDidDisappear()
+
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let secondRecordingID = try await waitForRequestedRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        await capture.emitRecordingStarted(
+            to: firstSessionID,
+            recordingID: firstRecordingID
+        )
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(
+            fixture.viewModel.state,
+            .awaitingRecordingStart(recordingID: secondRecordingID)
+        )
+
+        await capture.emitRecordingStarted(
+            recordingID: secondRecordingID
+        )
+        try await waitUntil {
+            fixture.viewModel.state
+                == .recording(recordingID: secondRecordingID)
         }
     }
 
@@ -1000,62 +1623,6 @@ final class CameraRecordingViewModelTests: XCTestCase {
         try await waitUntil { await capture.stopRecordingCount == 1 }
     }
 
-    func testPhotoSaveSuccessIsReported() async throws {
-        let fixture = makeFixture(
-            photos: TestPhotoLibrary(result: .saved)
-        )
-        try await finishOneRecording(
-            in: fixture.viewModel,
-            capture: fixture.capture
-        )
-
-        fixture.viewModel.saveToPhotos()
-        try await waitUntil {
-            fixture.viewModel.noticeMessage
-                == CameraRecordingStrings.savedToPhotos
-        }
-    }
-
-    func testPhotoPermissionDenialKeepsCompletedFileForSharing()
-        async throws
-    {
-        let fixture = makeFixture(
-            photos: TestPhotoLibrary(result: .permissionDenied)
-        )
-        try await finishOneRecording(
-            in: fixture.viewModel,
-            capture: fixture.capture
-        )
-        let completed = fixture.viewModel.completedRecording
-
-        fixture.viewModel.saveToPhotos()
-        try await waitUntil {
-            fixture.viewModel.errorMessage?.contains("仍保留在 App 内")
-                == true
-        }
-
-        XCTAssertEqual(fixture.viewModel.completedRecording, completed)
-    }
-
-    func testPhotoSaveFailureKeepsCompletedFile() async throws {
-        let fixture = makeFixture(
-            photos: TestPhotoLibrary(result: .failed)
-        )
-        try await finishOneRecording(
-            in: fixture.viewModel,
-            capture: fixture.capture
-        )
-        let completed = fixture.viewModel.completedRecording
-
-        fixture.viewModel.saveToPhotos()
-        try await waitUntil {
-            fixture.viewModel.errorMessage?.contains("仍可从 App 内分享")
-                == true
-        }
-
-        XCTAssertEqual(fixture.viewModel.completedRecording, completed)
-    }
-
     private func makeFixture(
         permissions: TestCapturePermissions = TestCapturePermissions(),
         capture: TestCaptureSession = TestCaptureSession(),
@@ -1065,7 +1632,8 @@ final class CameraRecordingViewModelTests: XCTestCase {
         ),
         photos: TestPhotoLibrary = TestPhotoLibrary(result: .saved),
         audio: TestAudioSession = TestAudioSession(),
-        preparationTimeout: Duration = .seconds(1)
+        preparationTimeout: Duration = .seconds(1),
+        recordingStartTimeout: Duration = .seconds(1)
     ) -> (
         viewModel: CameraRecordingViewModel,
         capture: TestCaptureSession,
@@ -1086,6 +1654,7 @@ final class CameraRecordingViewModelTests: XCTestCase {
             countdownSeconds: 1,
             countdownStep: .milliseconds(5),
             preparationTimeout: preparationTimeout,
+            recordingStartTimeout: recordingStartTimeout,
             isUITestFake: true
         )
         return (
@@ -1119,6 +1688,20 @@ final class CameraRecordingViewModelTests: XCTestCase {
         var result: UUID?
         try await waitUntil {
             if case .recording(let id) = viewModel.state {
+                result = id
+                return true
+            }
+            return false
+        }
+        return try XCTUnwrap(result)
+    }
+
+    private func waitForRequestedRecordingID(
+        viewModel: CameraRecordingViewModel
+    ) async throws -> UUID {
+        var result: UUID?
+        try await waitUntil {
+            if case .awaitingRecordingStart(let id) = viewModel.state {
                 result = id
                 return true
             }
@@ -1179,9 +1762,12 @@ private actor TestCaptureSession: CaptureSessionServicing {
     private var continuations:
         [UUID: AsyncStream<CaptureSessionEvent>.Continuation] = [:]
     private let availableFormats: [CaptureFormatOption]
+    private let reportedCapabilities: CaptureCapabilities
     private let focusError: CaptureError?
+    private let lockError: CaptureError?
     private let switchError: CaptureError?
     private let finishesWhenStopped: Bool
+    private let automaticallyStartsRecording: Bool
     private var activeSessionID: UUID?
     private var configuration: CaptureConfiguration?
     private var active: (id: UUID, url: URL, sessionID: UUID)?
@@ -1190,6 +1776,9 @@ private actor TestCaptureSession: CaptureSessionServicing {
         [UUID: CheckedContinuation<Void, Never>] = [:]
     private var suspendsCameraSwitch = false
     private var suspendedCameraSwitchContinuations:
+        [CheckedContinuation<Void, Never>] = []
+    private var suspendsFocusLock = false
+    private var suspendedFocusLockContinuations:
         [CheckedContinuation<Void, Never>] = []
     private(set) var configuredSessionIDs: [UUID] = []
     private(set) var configureCount = 0
@@ -1201,6 +1790,8 @@ private actor TestCaptureSession: CaptureSessionServicing {
     private(set) var backgroundCount = 0
     private(set) var foregroundCount = 0
     private(set) var lastStartRotationAngle: Double?
+    private(set) var focusRequests: [NormalizedCapturePoint] = []
+    private(set) var lockRequests: [Bool] = []
 
     init(
         availableFormats: [CaptureFormatOption] = [
@@ -1216,13 +1807,28 @@ private actor TestCaptureSession: CaptureSessionServicing {
             )
         ],
         focusError: CaptureError? = nil,
+        lockError: CaptureError? = nil,
         switchError: CaptureError? = nil,
-        finishesWhenStopped: Bool = false
+        finishesWhenStopped: Bool = false,
+        automaticallyStartsRecording: Bool = true,
+        capabilities: CaptureCapabilities? = nil
     ) {
         self.availableFormats = availableFormats
+        reportedCapabilities = capabilities ?? CaptureCapabilities(
+            availableFormats: availableFormats,
+            supportsFocusPoint: true,
+            supportsExposurePoint: true,
+            supportsFocusLock: true,
+            supportsExposureLock: true,
+            supportsContinuousFocus: true,
+            supportsContinuousExposure: true,
+            supportsVideoStabilization: true
+        )
         self.focusError = focusError
+        self.lockError = lockError
         self.switchError = switchError
         self.finishesWhenStopped = finishesWhenStopped
+        self.automaticallyStartsRecording = automaticallyStartsRecording
     }
 
     func events(
@@ -1276,14 +1882,7 @@ private actor TestCaptureSession: CaptureSessionServicing {
             .sessionReady(
                 source: nil,
                 configuration: configuration,
-                capabilities: CaptureCapabilities(
-                    availableFormats: availableFormats,
-                    supportsFocusPoint: true,
-                    supportsExposurePoint: true,
-                    supportsFocusLock: true,
-                    supportsExposureLock: true,
-                    supportsVideoStabilization: true
-                )
+                capabilities: reportedCapabilities
             )
         )
     }
@@ -1320,6 +1919,17 @@ private actor TestCaptureSession: CaptureSessionServicing {
         continuations.forEach { $0.resume() }
     }
 
+    func setSuspendsFocusLock(_ suspends: Bool) {
+        suspendsFocusLock = suspends
+    }
+
+    func resumeSuspendedFocusLocks() {
+        suspendsFocusLock = false
+        let continuations = suspendedFocusLockContinuations
+        suspendedFocusLockContinuations.removeAll()
+        continuations.forEach { $0.resume() }
+    }
+
     func emitReadyForTesting(
         sessionID: UUID,
         position: CameraPosition = .back
@@ -1334,14 +1944,7 @@ private actor TestCaptureSession: CaptureSessionServicing {
                     previewMirrored: position == .front,
                     outputMirrored: false
                 ),
-                capabilities: CaptureCapabilities(
-                    availableFormats: availableFormats,
-                    supportsFocusPoint: true,
-                    supportsExposurePoint: true,
-                    supportsFocusLock: true,
-                    supportsExposureLock: true,
-                    supportsVideoStabilization: true
-                )
+                capabilities: reportedCapabilities
             )
         )
     }
@@ -1382,14 +1985,7 @@ private actor TestCaptureSession: CaptureSessionServicing {
             .sessionReady(
                 source: nil,
                 configuration: updated,
-                capabilities: CaptureCapabilities(
-                    availableFormats: availableFormats,
-                    supportsFocusPoint: true,
-                    supportsExposurePoint: true,
-                    supportsFocusLock: true,
-                    supportsExposureLock: true,
-                    supportsVideoStabilization: true
-                )
+                capabilities: reportedCapabilities
             )
         )
     }
@@ -1409,6 +2005,11 @@ private actor TestCaptureSession: CaptureSessionServicing {
         startRecordingCount += 1
         lastStartRotationAngle = rotationAngle
         active = (recordingID, outputURL, sessionID)
+        if automaticallyStartsRecording {
+            continuations[sessionID]?.yield(
+                .recordingStarted(recordingID: recordingID)
+            )
+        }
     }
 
     func stopRecording(recordingID: UUID) async throws {
@@ -1428,17 +2029,64 @@ private actor TestCaptureSession: CaptureSessionServicing {
         }
     }
 
-    func setFocusAndExposure(
+    func emitRecordingStarted(recordingID: UUID) {
+        guard
+            let active,
+            active.id == recordingID
+        else {
+            return
+        }
+        continuations[active.sessionID]?.yield(
+            .recordingStarted(recordingID: recordingID)
+        )
+    }
+
+    func emitRecordingStarted(
+        to sessionID: UUID,
+        recordingID: UUID
+    ) {
+        continuations[sessionID]?.yield(
+            .recordingStarted(recordingID: recordingID)
+        )
+    }
+
+    func setFocusAndExposurePoint(
         sessionID: UUID,
-        at point: NormalizedCapturePoint,
-        locked: Bool
-    ) async throws {
+        at point: NormalizedCapturePoint
+    ) async throws -> CapturePointAdjustmentResult {
         guard activeSessionID == sessionID else {
             throw CaptureError.staleCallback
         }
         if let focusError {
             throw focusError
         }
+        focusRequests.append(point)
+        return CapturePointAdjustmentResult(
+            focusApplied: reportedCapabilities.supportsFocusPoint,
+            exposureApplied: reportedCapabilities.supportsExposurePoint
+        )
+    }
+
+    func setFocusAndExposureLocked(
+        sessionID: UUID,
+        locked: Bool
+    ) async throws -> CaptureFocusExposureLockState {
+        guard activeSessionID == sessionID else {
+            throw CaptureError.staleCallback
+        }
+        if let lockError {
+            throw lockError
+        }
+        lockRequests.append(locked)
+        if suspendsFocusLock {
+            await withCheckedContinuation { continuation in
+                suspendedFocusLockContinuations.append(continuation)
+            }
+        }
+        return CaptureFocusExposureLockState(
+            focusLocked: locked,
+            exposureLocked: locked
+        )
     }
 
     func handleApplicationBackgrounded(sessionID: UUID) async {
@@ -1454,6 +2102,16 @@ private actor TestCaptureSession: CaptureSessionServicing {
                     outputURL: active.url
                 )
             )
+            if finishesWhenStopped {
+                self.active = nil
+                continuations[sessionID]?.yield(
+                    .recordingFinished(
+                        recordingID: active.id,
+                        outputURL: active.url,
+                        duration: 0
+                    )
+                )
+            }
         } else {
             continuations[sessionID]?.yield(
                 .interrupted(
@@ -1472,7 +2130,22 @@ private actor TestCaptureSession: CaptureSessionServicing {
         foregroundCount += 1
     }
 
-    func finish(recordingID: UUID) {
+    func emitDuration(
+        recordingID: UUID,
+        seconds: TimeInterval
+    ) {
+        guard let sessionID = active?.sessionID else {
+            return
+        }
+        continuations[sessionID]?.yield(
+            .duration(recordingID: recordingID, seconds: seconds)
+        )
+    }
+
+    func finish(
+        recordingID: UUID,
+        duration: TimeInterval = 2
+    ) {
         let url: URL
         if active?.id == recordingID {
             url = active?.url ?? URL(fileURLWithPath: "/tmp/capture.mov")
@@ -1486,7 +2159,7 @@ private actor TestCaptureSession: CaptureSessionServicing {
             .recordingFinished(
                 recordingID: recordingID,
                 outputURL: url,
-                duration: 2
+                duration: duration
             )
             )
         }
@@ -1548,6 +2221,7 @@ private actor TestCaptureSession: CaptureSessionServicing {
 private actor TestRecordingFileStore: RecordingFileStoring {
     private(set) var createCount = 0
     private(set) var completeCount = 0
+    private(set) var markStartedCount = 0
     private(set) var preserveCount = 0
     private(set) var completedRecordings: [CompletedRecording] = []
     private(set) var deletedProjectIDs: [UUID] = []
@@ -1588,7 +2262,9 @@ private actor TestRecordingFileStore: RecordingFileStoring {
         )
     }
 
-    func markRecordingStarted(_ recording: PendingRecording) async throws {}
+    func markRecordingStarted(_ recording: PendingRecording) async throws {
+        markStartedCount += 1
+    }
 
     func completeRecording(
         _ recording: PendingRecording,

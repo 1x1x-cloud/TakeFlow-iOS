@@ -12,6 +12,7 @@ struct CameraRecordingDependencies {
     let countdownSeconds: Int
     let countdownStep: Duration
     let preparationTimeout: Duration
+    let recordingStartTimeout: Duration
 #if DEBUG
     let isUITestFake: Bool
 #endif
@@ -29,6 +30,7 @@ struct CameraRecordingDependencies {
             countdownSeconds: 3,
             countdownStep: .seconds(1),
             preparationTimeout: .seconds(12),
+            recordingStartTimeout: .seconds(8),
             isUITestFake: false
         )
 #else
@@ -42,7 +44,8 @@ struct CameraRecordingDependencies {
             storagePolicy: .production,
             countdownSeconds: 3,
             countdownStep: .seconds(1),
-            preparationTimeout: .seconds(12)
+            preparationTimeout: .seconds(12),
+            recordingStartTimeout: .seconds(8)
         )
 #endif
     }
@@ -77,6 +80,7 @@ struct CameraRecordingDependencies {
             preparationTimeout:
                 mode == .preparationTimesOutOnce
                 ? .milliseconds(250) : .seconds(12),
+            recordingStartTimeout: .seconds(8),
             isUITestFake: true
         )
     }
@@ -95,6 +99,7 @@ struct CameraRecordingDependencies {
             countdownSeconds: 3,
             countdownStep: .seconds(1),
             preparationTimeout: .seconds(12),
+            recordingStartTimeout: .seconds(8),
             isUITestFake: false
         )
 #else
@@ -108,7 +113,8 @@ struct CameraRecordingDependencies {
             storagePolicy: .production,
             countdownSeconds: 3,
             countdownStep: .seconds(1),
-            preparationTimeout: .seconds(12)
+            preparationTimeout: .seconds(12),
+            recordingStartTimeout: .seconds(8)
         )
 #endif
     }
@@ -255,6 +261,8 @@ actor FakeCaptureSessionService: CaptureSessionServicing {
                     supportsExposurePoint: true,
                     supportsFocusLock: true,
                     supportsExposureLock: true,
+                    supportsContinuousFocus: true,
+                    supportsContinuousExposure: true,
                     supportsVideoStabilization: true
                 )
             )
@@ -313,6 +321,8 @@ actor FakeCaptureSessionService: CaptureSessionServicing {
                     supportsExposurePoint: true,
                     supportsFocusLock: true,
                     supportsExposureLock: true,
+                    supportsContinuousFocus: true,
+                    supportsContinuousExposure: true,
                     supportsVideoStabilization: true
                 )
             )
@@ -337,6 +347,9 @@ actor FakeCaptureSessionService: CaptureSessionServicing {
         )
         activeRecording = (recordingID, outputURL, sessionID)
         lockedRotationAngle = rotationAngle
+        continuations[sessionID]?.yield(
+            .recordingStarted(recordingID: recordingID)
+        )
         continuations[sessionID]?.yield(
             .duration(recordingID: recordingID, seconds: 0)
         )
@@ -366,14 +379,30 @@ actor FakeCaptureSessionService: CaptureSessionServicing {
         )
     }
 
-    func setFocusAndExposure(
+    func setFocusAndExposurePoint(
         sessionID: UUID,
-        at point: NormalizedCapturePoint,
-        locked: Bool
-    ) async throws {
+        at point: NormalizedCapturePoint
+    ) async throws -> CapturePointAdjustmentResult {
         guard activeSessionID == sessionID else {
             throw CaptureError.staleCallback
         }
+        return CapturePointAdjustmentResult(
+            focusApplied: true,
+            exposureApplied: true
+        )
+    }
+
+    func setFocusAndExposureLocked(
+        sessionID: UUID,
+        locked: Bool
+    ) async throws -> CaptureFocusExposureLockState {
+        guard activeSessionID == sessionID else {
+            throw CaptureError.staleCallback
+        }
+        return CaptureFocusExposureLockState(
+            focusLocked: locked,
+            exposureLocked: locked
+        )
     }
 
     func handleApplicationBackgrounded(sessionID: UUID) async {
@@ -441,13 +470,64 @@ struct FakeStorageSpaceService: StorageSpaceChecking {
     }
 }
 
-struct FakePhotoLibraryService: PhotoLibrarySaving {
+actor FakePhotoLibraryService: PhotoLibrarySaving {
+    private var pendingContinuations:
+        [
+            (
+                id: UUID,
+                continuation:
+                    CheckedContinuation<PhotoSaveResult, Never>
+            )
+        ] = []
+    private var queuedResults: [PhotoSaveResult] = []
+
     func authorizationStatus() async -> PermissionState {
         .authorized
     }
 
     func saveVideo(at url: URL) async -> PhotoSaveResult {
-        .saved
+        if !queuedResults.isEmpty {
+            return queuedResults.removeFirst()
+        }
+        let operationID = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard !Task.isCancelled else {
+                    continuation.resume(returning: .failed)
+                    return
+                }
+                pendingContinuations.append(
+                    (operationID, continuation)
+                )
+            }
+        } onCancel: {
+            Task {
+                await self.cancelSave(operationID: operationID)
+            }
+        }
+    }
+
+    func completeNextSave(with result: PhotoSaveResult) {
+        guard !pendingContinuations.isEmpty else {
+            queuedResults.append(result)
+            return
+        }
+        pendingContinuations.removeFirst().continuation.resume(
+            returning: result
+        )
+    }
+
+    private func cancelSave(operationID: UUID) {
+        guard
+            let index = pendingContinuations.firstIndex(
+                where: { $0.id == operationID }
+            )
+        else {
+            return
+        }
+        pendingContinuations.remove(at: index).continuation.resume(
+            returning: .failed
+        )
     }
 }
 
@@ -523,11 +603,17 @@ private actor UnavailableCaptureSessionService: CaptureSessionServicing {
         throw CaptureError.notRecording
     }
 
-    func setFocusAndExposure(
+    func setFocusAndExposurePoint(
         sessionID: UUID,
-        at point: NormalizedCapturePoint,
+        at point: NormalizedCapturePoint
+    ) async throws -> CapturePointAdjustmentResult {
+        throw CaptureError.cameraUnavailable
+    }
+
+    func setFocusAndExposureLocked(
+        sessionID: UUID,
         locked: Bool
-    ) async throws {
+    ) async throws -> CaptureFocusExposureLockState {
         throw CaptureError.cameraUnavailable
     }
 

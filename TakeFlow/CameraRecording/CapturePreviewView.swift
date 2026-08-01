@@ -2,10 +2,41 @@
 import SwiftUI
 import UIKit
 
+struct CaptureFocusRequest: Equatable {
+    let id: UUID
+    let screenPoint: CGPoint
+    let indicatorPoint: CGPoint
+}
+
+enum CapturePreviewPointConverter {
+    static func convert(
+        screenPoint: CGPoint,
+        previewFrameInWindow: CGRect,
+        devicePointForLayerPoint: (CGPoint) -> CGPoint
+    ) -> NormalizedCapturePoint? {
+        let layerPoint = CGPoint(
+            x: screenPoint.x - previewFrameInWindow.minX,
+            y: screenPoint.y - previewFrameInWindow.minY
+        )
+        guard CGRect(origin: .zero, size: previewFrameInWindow.size)
+            .contains(layerPoint)
+        else {
+            return nil
+        }
+        let converted = devicePointForLayerPoint(layerPoint)
+        return NormalizedCapturePoint(
+            x: converted.x,
+            y: converted.y
+        )
+    }
+}
+
 struct CapturePreviewView: UIViewRepresentable {
     let source: CapturePreviewSource
     let mirrored: Bool
-    let onFocus: (NormalizedCapturePoint) -> Void
+    let focusRequest: CaptureFocusRequest?
+    let onFocus:
+        (_ point: NormalizedCapturePoint, _ requestID: UUID) -> Void
     let onRotationAngleChanged: (Double) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -35,6 +66,7 @@ struct CapturePreviewView: UIViewRepresentable {
             AVCaptureDevice.RotationCoordinator?
         private var previewObservation: NSKeyValueObservation?
         private var captureObservation: NSKeyValueObservation?
+        private var handledFocusRequestID: UUID?
 
         init(parent: CapturePreviewView) {
             self.parent = parent
@@ -42,19 +74,6 @@ struct CapturePreviewView: UIViewRepresentable {
 
         func attach(to view: CapturePreviewUIView) {
             self.view = view
-            view.onTap = { [weak self] point in
-                guard let self, let view = self.view else {
-                    return
-                }
-                let devicePoint = view.previewLayer
-                    .captureDevicePointConverted(fromLayerPoint: point)
-                self.parent.onFocus(
-                    NormalizedCapturePoint(
-                        x: devicePoint.x,
-                        y: devicePoint.y
-                    )
-                )
-            }
             apply(to: view)
         }
 
@@ -71,6 +90,32 @@ struct CapturePreviewView: UIViewRepresentable {
                 connection.automaticallyAdjustsVideoMirroring = false
                 connection.isVideoMirrored = parent.mirrored
             }
+            applyFocusRequest(to: view)
+        }
+
+        private func applyFocusRequest(to view: CapturePreviewUIView) {
+            guard
+                let request = parent.focusRequest,
+                request.id != handledFocusRequestID,
+                let window = view.window
+            else {
+                return
+            }
+            let frameInWindow = view.convert(view.bounds, to: window)
+            guard let devicePoint = CapturePreviewPointConverter.convert(
+                screenPoint: request.screenPoint,
+                previewFrameInWindow: frameInWindow,
+                devicePointForLayerPoint: {
+                    view.previewLayer.captureDevicePointConverted(
+                        fromLayerPoint: $0
+                    )
+                }
+            ) else {
+                handledFocusRequestID = request.id
+                return
+            }
+            handledFocusRequestID = request.id
+            parent.onFocus(devicePoint, request.id)
         }
 
         private func installRotationCoordinator(
@@ -122,8 +167,6 @@ struct CapturePreviewView: UIViewRepresentable {
 }
 
 final class CapturePreviewUIView: UIView {
-    var onTap: ((CGPoint) -> Void)?
-
     override class var layerClass: AnyClass {
         AVCaptureVideoPreviewLayer.self
     }
@@ -137,18 +180,9 @@ final class CapturePreviewUIView: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        let tap = UITapGestureRecognizer(
-            target: self,
-            action: #selector(handleTap(_:))
-        )
-        addGestureRecognizer(tap)
     }
 
     required init?(coder: NSCoder) {
         nil
-    }
-
-    @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
-        onTap?(recognizer.location(in: self))
     }
 }

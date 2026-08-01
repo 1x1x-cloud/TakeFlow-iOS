@@ -338,6 +338,133 @@ final class TakeFlowUITests: XCTestCase {
     }
 
     @MainActor
+    func testLocalPreviewSavePausesAndKeepsSinglePlayer()
+        throws
+    {
+        let app = launchCaptureApp()
+        createScriptAndOpenCapture(
+            app: app,
+            content: String(
+                repeating: "本地预览播放器生命周期。\n",
+                count: 30
+            )
+        )
+        waitForCaptureState(app, containing: "预览已就绪", timeout: 5)
+
+        let record = app.buttons["capture.record"]
+        record.tap()
+        waitForCaptureState(app, containing: "正在录制", timeout: 6)
+        record.tap()
+        waitForCaptureState(app, containing: "录制已完成", timeout: 3)
+
+        let preview = app.buttons["capture.localPreview"]
+        preview.tap()
+        let previewScreen =
+            app.descendants(matching: .any)["capture.previewScreen"]
+        XCTAssertTrue(previewScreen.waitForExistence(timeout: 3))
+
+        let playback =
+            app.descendants(matching: .any)["capture.previewPlayback"]
+        let metrics =
+            app.descendants(matching: .any)[
+                "capture.previewPlayerMetrics"
+            ]
+        XCTAssertTrue(playback.waitForExistence(timeout: 3))
+        XCTAssertEqual(playback.value as? String, "视频已暂停")
+        XCTAssertTrue(metrics.waitForExistence(timeout: 3))
+        XCTAssertTrue(metrics.label.contains("活动播放器 1"))
+        XCTAssertTrue(metrics.label.contains("已创建 1"))
+
+        playback.tap()
+        expectation(
+            for: NSPredicate(
+                format: "value == %@",
+                "视频正在播放"
+            ),
+            evaluatedWith: playback
+        )
+        waitForExpectations(timeout: 2)
+
+        let save = app.buttons["capture.savePhotos"]
+        save.tap()
+        expectation(
+            for: NSPredicate(
+                format: "value == %@",
+                "视频已暂停"
+            ),
+            evaluatedWith: playback
+        )
+        waitForExpectations(timeout: 2)
+        let photoStatus =
+            app.descendants(matching: .any)[
+                "capture.photoSaveStatus"
+            ]
+        expectation(
+            for: NSPredicate(
+                format: "label == %@",
+                "正在保存…"
+            ),
+            evaluatedWith: photoStatus
+        )
+        waitForExpectations(timeout: 2)
+        XCTAssertFalse(save.isEnabled)
+        XCTAssertEqual(save.label, "正在保存…")
+        XCTAssertTrue(metrics.label.contains("活动播放器 1"))
+        XCTAssertTrue(metrics.label.contains("已创建 1"))
+
+        app.buttons["capture.completePhotoSave"].tap()
+        expectation(
+            for: NSPredicate(
+                format: "label == %@",
+                "已保存到照片"
+            ),
+            evaluatedWith: photoStatus
+        )
+        waitForExpectations(timeout: 2)
+        XCTAssertTrue(previewScreen.exists)
+        XCTAssertEqual(playback.value as? String, "视频已暂停")
+        XCTAssertEqual(save.label, "已保存")
+        XCTAssertFalse(save.isEnabled)
+        XCTAssertTrue(metrics.label.contains("活动播放器 1"))
+        XCTAssertTrue(metrics.label.contains("已创建 1"))
+
+        playback.tap()
+        expectation(
+            for: NSPredicate(
+                format: "value == %@",
+                "视频正在播放"
+            ),
+            evaluatedWith: playback
+        )
+        waitForExpectations(timeout: 2)
+        XCTAssertTrue(metrics.label.contains("活动播放器 1"))
+
+        app.buttons["capture.previewClose"].tap()
+        XCTAssertTrue(previewScreen.waitForNonExistence(timeout: 3))
+
+        preview.tap()
+        XCTAssertTrue(previewScreen.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            app.descendants(matching: .any)[
+                "capture.previewPlayerMetrics"
+            ]
+                .label.contains("活动播放器 1")
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)[
+                "capture.previewPlayerMetrics"
+            ]
+                .label.contains("已创建 2")
+        )
+        XCTAssertEqual(
+            app.descendants(matching: .any)[
+                "capture.previewPlayback"
+            ].value as? String,
+            "视频已暂停"
+        )
+    }
+
+    @MainActor
     func testCaptureCameraPermissionDenied() throws {
         let app = launchCaptureApp(
             extraArguments: ["-ui-testing-camera-denied"]
@@ -622,6 +749,140 @@ final class TakeFlowUITests: XCTestCase {
             label: "暂停",
             timeout: 2
         )
+    }
+
+    @MainActor
+    func testCapturePromptTapFocusesAndDeviceLockIsTruthful()
+        throws
+    {
+        let app = launchCaptureApp()
+        createScriptAndOpenCapture(
+            app: app,
+            content: String(repeating: "点击提词区域也应对焦。\n", count: 80)
+        )
+        waitForCaptureState(app, containing: "预览已就绪", timeout: 5)
+
+        let prompt = app.descendants(matching: .any)[
+            "capture.teleprompter.text"
+        ]
+        XCTAssertTrue(prompt.waitForExistence(timeout: 3))
+        prompt.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25))
+            .tap()
+
+        let notice = app.descendants(matching: .any)[
+            "capture.focusNotice"
+        ]
+        expectation(
+            for: NSPredicate(
+                format: "label CONTAINS %@",
+                "已设置"
+            ),
+            evaluatedWith: notice
+        )
+        waitForExpectations(timeout: 2)
+
+        let lock = app.buttons["capture.focusLock"]
+        XCTAssertTrue(lock.isEnabled)
+        lock.tap()
+        expectation(
+            for: NSPredicate(
+                format: "value == %@",
+                "焦点和曝光已锁定"
+            ),
+            evaluatedWith: lock
+        )
+        waitForExpectations(timeout: 2)
+
+        lock.tap()
+        expectation(
+            for: NSPredicate(
+                format: "value == %@",
+                "焦点和曝光自动调整"
+            ),
+            evaluatedWith: lock
+        )
+        waitForExpectations(timeout: 2)
+    }
+
+    @MainActor
+    func testCaptureCameraSwitchClearsOldFocusLockFeedback()
+        throws
+    {
+        let app = launchCaptureApp()
+        createScriptAndOpenCapture(
+            app: app,
+            content: String(repeating: "切换镜头清理旧对焦状态。\n", count: 40)
+        )
+        waitForCaptureState(app, containing: "预览已就绪", timeout: 5)
+
+        let prompt = app.descendants(matching: .any)[
+            "capture.teleprompter.text"
+        ]
+        prompt.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)
+        ).tap()
+        let focusNotice = app.descendants(matching: .any)[
+            "capture.focusNotice"
+        ]
+        XCTAssertTrue(focusNotice.waitForExistence(timeout: 2))
+
+        let lock = app.buttons["capture.focusLock"]
+        lock.tap()
+        expectation(
+            for: NSPredicate(
+                format: "value == %@",
+                "焦点和曝光已锁定"
+            ),
+            evaluatedWith: lock
+        )
+        waitForExpectations(timeout: 2)
+        XCTAssertEqual(lock.label, "解锁焦点和曝光")
+
+        app.buttons["capture.switchCamera"].tap()
+        XCTAssertFalse(focusNotice.waitForExistence(timeout: 0.5))
+        waitForCaptureState(app, containing: "预览已就绪", timeout: 5)
+
+        XCTAssertEqual(lock.label, "锁定焦点和曝光")
+        XCTAssertEqual(lock.value as? String, "焦点和曝光自动调整")
+        XCTAssertFalse(focusNotice.exists)
+        XCTAssertTrue(lock.isEnabled)
+    }
+
+    @MainActor
+    func testCapturePromptDragAndControlTapDoNotTriggerFocus()
+        throws
+    {
+        let app = launchCaptureApp()
+        createScriptAndOpenCapture(
+            app: app,
+            content: String(repeating: "拖动提词不应触发对焦。\n", count: 100)
+        )
+        waitForCaptureState(app, containing: "预览已就绪", timeout: 5)
+
+        let prompt = app.descendants(matching: .any)[
+            "capture.teleprompter.text"
+        ]
+        XCTAssertTrue(prompt.waitForExistence(timeout: 3))
+        let start = prompt.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)
+        )
+        let end = prompt.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)
+        )
+        start.press(
+            forDuration: 0.05,
+            thenDragTo: end,
+            withVelocity: .fast,
+            thenHoldForDuration: 0
+        )
+
+        let indicator = app.descendants(matching: .any)[
+            "capture.focusIndicator"
+        ]
+        XCTAssertFalse(indicator.waitForExistence(timeout: 0.4))
+
+        app.buttons["capture.switchCamera"].tap()
+        XCTAssertFalse(indicator.waitForExistence(timeout: 0.4))
     }
 
     @MainActor

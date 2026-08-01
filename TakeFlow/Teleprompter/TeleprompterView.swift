@@ -122,7 +122,7 @@ struct TeleprompterView: View {
             anchor: viewModel.anchor,
             layoutRevision: viewModel.layoutRevision,
             foregroundColor: UIColor(foregroundColor),
-            onTapped: toggleControls,
+            onTapped: { _ in toggleControls() },
             onDragStarted: viewModel.beginDragging,
             onDragChanged: viewModel.updateDragging,
             onDragEnded: viewModel.endDragging,

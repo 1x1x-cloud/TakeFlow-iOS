@@ -21,11 +21,14 @@ protocol CaptureSessionServicing: Sendable {
         rotationAngle: Double
     ) async throws
     func stopRecording(recordingID: UUID) async throws
-    func setFocusAndExposure(
+    func setFocusAndExposurePoint(
         sessionID: UUID,
-        at point: NormalizedCapturePoint,
+        at point: NormalizedCapturePoint
+    ) async throws -> CapturePointAdjustmentResult
+    func setFocusAndExposureLocked(
+        sessionID: UUID,
         locked: Bool
-    ) async throws
+    ) async throws -> CaptureFocusExposureLockState
     func handleApplicationBackgrounded(sessionID: UUID) async
     func handleApplicationForegrounded(sessionID: UUID) async
 }

@@ -6,6 +6,7 @@ enum RecordingState: Equatable, Sendable {
     case configuring
     case ready
     case starting(countdownRemaining: Int)
+    case awaitingRecordingStart(recordingID: UUID)
     case recording(recordingID: UUID)
     case stopping(recordingID: UUID)
     case finished(recordingID: UUID, fileURL: URL)
@@ -16,6 +17,15 @@ enum RecordingState: Equatable, Sendable {
     var isActivelyRecording: Bool {
         switch self {
         case .recording, .stopping:
+            true
+        default:
+            false
+        }
+    }
+
+    var hasPendingOrActiveRecording: Bool {
+        switch self {
+        case .awaitingRecordingStart, .recording, .stopping:
             true
         default:
             false
@@ -86,15 +96,29 @@ struct RecordingStateMachine: Sendable {
         state = .ready
     }
 
-    mutating func markRecording(recordingID: UUID) throws {
+    mutating func markRecordingStartRequested(recordingID: UUID) throws {
         guard case .starting = state else {
             throw CaptureError.invalidTransition
+        }
+        state = .awaitingRecordingStart(recordingID: recordingID)
+    }
+
+    mutating func confirmRecordingStarted(recordingID: UUID) throws {
+        guard
+            case .awaitingRecordingStart(let requestedID) = state,
+            requestedID == recordingID
+        else {
+            throw CaptureError.staleCallback
         }
         state = .recording(recordingID: recordingID)
     }
 
     mutating func beginStopping(recordingID: UUID) throws -> Bool {
         switch state {
+        case .awaitingRecordingStart(let activeID)
+            where activeID == recordingID:
+            state = .stopping(recordingID: recordingID)
+            return true
         case .recording(let activeID) where activeID == recordingID:
             state = .stopping(recordingID: recordingID)
             return true
@@ -142,7 +166,9 @@ struct RecordingStateMachine: Sendable {
         source: CaptureInterruptionSource = .captureSession
     ) -> Bool {
         switch state {
-        case .recording(let activeID), .stopping(let activeID):
+        case .awaitingRecordingStart(let activeID),
+             .recording(let activeID),
+             .stopping(let activeID):
             guard recordingID == nil || recordingID == activeID else {
                 return false
             }
@@ -184,7 +210,8 @@ struct RecordingStateMachine: Sendable {
     ) -> Bool {
         guard case .interrupted(_, let reason) = state else {
             switch state {
-            case .ready, .recording, .stopping, .configuring:
+            case .ready, .awaitingRecordingStart, .recording, .stopping,
+                 .configuring:
                 endedSourcesAwaitingBegin.insert(source)
             default:
                 break

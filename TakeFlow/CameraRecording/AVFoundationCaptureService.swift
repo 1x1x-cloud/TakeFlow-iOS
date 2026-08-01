@@ -19,11 +19,17 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
     private var activeSessionGeneration: UInt64 = 0
     private var eventContinuations:
         [UUID: AsyncStream<CaptureSessionEvent>.Continuation] = [:]
-    private var activeRecordings:
-        [URL: (recordingID: UUID, sessionID: UUID)] = [:]
+    private struct ActiveRecordingContext: Sendable {
+        let recordingID: UUID
+        let sessionID: UUID
+        let sessionGeneration: UInt64
+        var didStart = false
+    }
+    private var activeRecordings: [URL: ActiveRecordingContext] = [:]
     private var activeRecordingID: UUID?
     private var stoppingRecordingID: UUID?
     private var durationTimer: DispatchSourceTimer?
+    private var elapsedTimekeeper: RecordingElapsedTimekeeper
     private var notificationTokens: [NSObjectProtocol] = []
     private var shouldStopSessionAfterRecording = false
     private var interruptionWasIssued = false
@@ -35,6 +41,14 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
     }
 
     override init() {
+        elapsedTimekeeper = RecordingElapsedTimekeeper()
+        super.init()
+    }
+
+    init(timeSource: any RecordingMonotonicTimeProviding) {
+        elapsedTimekeeper = RecordingElapsedTimekeeper(
+            timeSource: timeSource
+        )
         super.init()
     }
 
@@ -142,12 +156,8 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
             }
             guard self.activeRecordingID == nil else {
                 self.shouldStopSessionAfterRecording = true
-                if
-                    self.stoppingRecordingID != self.activeRecordingID,
-                    self.movieOutput.isRecording
-                {
-                    self.stoppingRecordingID = self.activeRecordingID
-                    self.movieOutput.stopRecording()
+                if let recordingID = self.activeRecordingID {
+                    self.requestStopLocked(recordingID: recordingID)
                 }
                 return
             }
@@ -260,14 +270,15 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
             }
 
             self.movieOutput.movieFragmentInterval = CMTime(
-                seconds: 2,
+                seconds: RecordingMediaPolicy.movieFragmentIntervalSeconds,
                 preferredTimescale: 600
             )
             let standardizedURL = outputURL.standardizedFileURL
             self.activeRecordingID = recordingID
-            self.activeRecordings[standardizedURL] = (
+            self.activeRecordings[standardizedURL] = ActiveRecordingContext(
                 recordingID: recordingID,
-                sessionID: sessionID
+                sessionID: sessionID,
+                sessionGeneration: self.activeSessionGeneration
             )
             self.interruptionWasIssued = false
             self.shouldStopSessionAfterRecording = false
@@ -276,7 +287,6 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
                 to: standardizedURL,
                 recordingDelegate: self
             )
-            self.startDurationTimer(recordingID: recordingID)
         }
     }
 
@@ -288,22 +298,14 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
             guard activeID == recordingID else {
                 throw CaptureError.staleCallback
             }
-            if self.stoppingRecordingID == recordingID {
-                return
-            }
-            guard self.movieOutput.isRecording else {
-                throw CaptureError.notRecording
-            }
-            self.stoppingRecordingID = recordingID
-            self.movieOutput.stopRecording()
+            self.requestStopLocked(recordingID: recordingID)
         }
     }
 
-    func setFocusAndExposure(
+    func setFocusAndExposurePoint(
         sessionID: UUID,
-        at point: NormalizedCapturePoint,
-        locked: Bool
-    ) async throws {
+        at point: NormalizedCapturePoint
+    ) async throws -> CapturePointAdjustmentResult {
         try await runOnSessionQueue {
             guard self.activeSessionID == sessionID else {
                 throw CaptureError.staleCallback
@@ -311,37 +313,72 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
             guard let device = self.videoInput?.device else {
                 throw CaptureError.cameraUnavailable
             }
-            guard
+            let canSetFocusPoint =
                 device.isFocusPointOfInterestSupported
-                    || device.isExposurePointOfInterestSupported
-            else {
+                && device.isFocusModeSupported(.autoFocus)
+            let canSetExposurePoint =
+                device.isExposurePointOfInterestSupported
+                && device.isExposureModeSupported(.autoExpose)
+            guard canSetFocusPoint || canSetExposurePoint else {
                 throw CaptureError.focusUnsupported
             }
             let devicePoint = CGPoint(x: point.x, y: point.y)
             try device.lockForConfiguration()
             defer { device.unlockForConfiguration() }
 
-            if device.isFocusPointOfInterestSupported {
+            var focusApplied = false
+            if canSetFocusPoint {
                 device.focusPointOfInterest = devicePoint
-                let focusMode: AVCaptureDevice.FocusMode =
-                    locked && device.isFocusModeSupported(.locked)
-                    ? .locked : .autoFocus
-                guard device.isFocusModeSupported(focusMode) else {
-                    throw CaptureError.focusUnsupported
-                }
-                device.focusMode = focusMode
+                device.focusMode = .autoFocus
+                focusApplied = true
             }
 
-            if device.isExposurePointOfInterestSupported {
+            var exposureApplied = false
+            if canSetExposurePoint {
                 device.exposurePointOfInterest = devicePoint
-                let exposureMode: AVCaptureDevice.ExposureMode =
-                    locked && device.isExposureModeSupported(.locked)
-                    ? .locked : .continuousAutoExposure
-                guard device.isExposureModeSupported(exposureMode) else {
-                    throw CaptureError.exposureUnsupported
-                }
-                device.exposureMode = exposureMode
+                device.exposureMode = .autoExpose
+                exposureApplied = true
             }
+
+            return CapturePointAdjustmentResult(
+                focusApplied: focusApplied,
+                exposureApplied: exposureApplied
+            )
+        }
+    }
+
+    func setFocusAndExposureLocked(
+        sessionID: UUID,
+        locked: Bool
+    ) async throws -> CaptureFocusExposureLockState {
+        try await runOnSessionQueue {
+            guard self.activeSessionID == sessionID else {
+                throw CaptureError.staleCallback
+            }
+            guard let device = self.videoInput?.device else {
+                throw CaptureError.cameraUnavailable
+            }
+
+            let focusMode: AVCaptureDevice.FocusMode =
+                locked ? .locked : .continuousAutoFocus
+            let exposureMode: AVCaptureDevice.ExposureMode =
+                locked ? .locked : .continuousAutoExposure
+            guard device.isFocusModeSupported(focusMode) else {
+                throw CaptureError.focusUnsupported
+            }
+            guard device.isExposureModeSupported(exposureMode) else {
+                throw CaptureError.exposureUnsupported
+            }
+
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+            device.focusMode = focusMode
+            device.exposureMode = exposureMode
+
+            return CaptureFocusExposureLockState(
+                focusLocked: device.focusMode == .locked,
+                exposureLocked: device.exposureMode == .locked
+            )
         }
     }
 
@@ -440,6 +477,7 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
             on: device,
             resolution: selectedFormat.resolution
         )
+        try resetFocusAndExposureToContinuousModes(on: device)
 
         let capabilities = makeCapabilities(
             device: device,
@@ -508,6 +546,9 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
         }
 
         let newVideoInput = try AVCaptureDeviceInput(device: device)
+        try resetFocusAndExposureToContinuousModes(
+            on: oldVideoInput.device
+        )
         session.beginConfiguration()
         session.removeInput(oldVideoInput)
         do {
@@ -524,6 +565,7 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
                 on: device,
                 resolution: selectedFormat.resolution
             )
+            try resetFocusAndExposureToContinuousModes(on: device)
             session.commitConfiguration()
         } catch {
             if session.inputs.contains(where: { $0 === newVideoInput }) {
@@ -584,10 +626,18 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
             }
         return CaptureCapabilities(
             availableFormats: formats,
-            supportsFocusPoint: device.isFocusPointOfInterestSupported,
-            supportsExposurePoint: device.isExposurePointOfInterestSupported,
+            supportsFocusPoint:
+                device.isFocusPointOfInterestSupported
+                && device.isFocusModeSupported(.autoFocus),
+            supportsExposurePoint:
+                device.isExposurePointOfInterestSupported
+                && device.isExposureModeSupported(.autoExpose),
             supportsFocusLock: device.isFocusModeSupported(.locked),
             supportsExposureLock: device.isExposureModeSupported(.locked),
+            supportsContinuousFocus:
+                device.isFocusModeSupported(.continuousAutoFocus),
+            supportsContinuousExposure:
+                device.isExposureModeSupported(.continuousAutoExposure),
             supportsVideoStabilization:
                 movieOutput.connection(with: .video)?
                     .isVideoStabilizationSupported == true
@@ -636,6 +686,26 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
         device.activeVideoMaxFrameDuration = duration
     }
 
+    private func resetFocusAndExposureToContinuousModes(
+        on device: AVCaptureDevice
+    ) throws {
+        let canResetFocus =
+            device.isFocusModeSupported(.continuousAutoFocus)
+        let canResetExposure =
+            device.isExposureModeSupported(.continuousAutoExposure)
+        guard canResetFocus || canResetExposure else {
+            return
+        }
+        try device.lockForConfiguration()
+        defer { device.unlockForConfiguration() }
+        if canResetFocus {
+            device.focusMode = .continuousAutoFocus
+        }
+        if canResetExposure {
+            device.exposureMode = .continuousAutoExposure
+        }
+    }
+
     private func selectCodec(
         resolution: VideoResolution,
         available: [AVVideoCodecType]
@@ -646,29 +716,58 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
     }
 
     private func startDurationTimer(recordingID: UUID) {
+        guard elapsedTimekeeper.start(recordingID: recordingID) else {
+            return
+        }
         durationTimer?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: sessionQueue)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(250))
+        timer.schedule(
+            deadline: .now(),
+            repeating: RecordingMediaPolicy.durationUpdateInterval
+        )
         timer.setEventHandler { [weak self] in
             guard
                 let self,
                 self.activeRecordingID == recordingID,
-                self.movieOutput.isRecording
+                self.movieOutput.isRecording,
+                let seconds = self.elapsedTimekeeper.elapsed(
+                    for: recordingID
+                )
             else {
                 return
             }
-            let seconds = CMTimeGetSeconds(self.movieOutput.recordedDuration)
-            if seconds.isFinite {
-                self.yieldToActiveSession(
-                    .duration(
-                        recordingID: recordingID,
-                        seconds: seconds
-                    )
+            self.yieldToActiveSession(
+                .duration(
+                    recordingID: recordingID,
+                    seconds: seconds
                 )
-            }
+            )
         }
         durationTimer = timer
         timer.resume()
+    }
+
+    private func stopDurationTimer(recordingID: UUID) {
+        durationTimer?.cancel()
+        durationTimer = nil
+        _ = elapsedTimekeeper.stop(recordingID: recordingID)
+    }
+
+    private func requestStopLocked(recordingID: UUID) {
+        guard activeRecordingID == recordingID else {
+            return
+        }
+        guard stoppingRecordingID != recordingID else {
+            return
+        }
+        stoppingRecordingID = recordingID
+        stopDurationTimer(recordingID: recordingID)
+        let hasRequestedOutput = activeRecordings.values.contains {
+            $0.recordingID == recordingID
+        }
+        if movieOutput.isRecording || hasRequestedOutput {
+            movieOutput.stopRecording()
+        }
     }
 
     private func installNotifications(for context: NotificationContext) {
@@ -797,13 +896,7 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
                 )
             )
             shouldStopSessionAfterRecording = true
-            if
-                stoppingRecordingID != recordingID,
-                movieOutput.isRecording
-            {
-                stoppingRecordingID = recordingID
-                movieOutput.stopRecording()
-            }
+            requestStopLocked(recordingID: recordingID)
         } else {
             yieldToActiveSession(
                 .interrupted(
@@ -968,6 +1061,46 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
 extension AVFoundationCaptureService: AVCaptureFileOutputRecordingDelegate {
     func fileOutput(
         _ output: AVCaptureFileOutput,
+        didStartRecordingTo outputFileURL: URL,
+        from connections: [AVCaptureConnection]
+    ) {
+        sessionQueue.async {
+            let standardizedURL = outputFileURL.standardizedFileURL
+            guard
+                var recordingContext =
+                    self.activeRecordings[standardizedURL],
+                self.activeRecordingID == recordingContext.recordingID,
+                self.activeSessionID == recordingContext.sessionID,
+                self.activeSessionGeneration
+                    == recordingContext.sessionGeneration,
+                !recordingContext.didStart
+            else {
+                return
+            }
+
+            if self.stoppingRecordingID == recordingContext.recordingID {
+                if output.isRecording {
+                    output.stopRecording()
+                }
+                return
+            }
+
+            recordingContext.didStart = true
+            self.activeRecordings[standardizedURL] = recordingContext
+            self.yield(
+                .recordingStarted(
+                    recordingID: recordingContext.recordingID
+                ),
+                to: recordingContext.sessionID
+            )
+            self.startDurationTimer(
+                recordingID: recordingContext.recordingID
+            )
+        }
+    }
+
+    func fileOutput(
+        _ output: AVCaptureFileOutput,
         didFinishRecordingTo outputFileURL: URL,
         from connections: [AVCaptureConnection],
         error: (any Error)?
@@ -983,8 +1116,8 @@ extension AVFoundationCaptureService: AVCaptureFileOutputRecordingDelegate {
             }
             let recordingID = recordingContext.recordingID
             let duration = CMTimeGetSeconds(output.recordedDuration)
-            self.durationTimer?.cancel()
-            self.durationTimer = nil
+            self.stopDurationTimer(recordingID: recordingID)
+            self.elapsedTimekeeper.reset()
             self.activeRecordingID = nil
             self.stoppingRecordingID = nil
 

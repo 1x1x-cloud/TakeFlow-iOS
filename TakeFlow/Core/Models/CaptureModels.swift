@@ -27,6 +27,8 @@ struct CaptureCapabilities: Codable, Equatable, Sendable {
     var supportsExposurePoint: Bool
     var supportsFocusLock: Bool
     var supportsExposureLock: Bool
+    var supportsContinuousFocus: Bool
+    var supportsContinuousExposure: Bool
     var supportsVideoStabilization: Bool
 
     static let unavailable = CaptureCapabilities(
@@ -35,6 +37,8 @@ struct CaptureCapabilities: Codable, Equatable, Sendable {
         supportsExposurePoint: false,
         supportsFocusLock: false,
         supportsExposureLock: false,
+        supportsContinuousFocus: false,
+        supportsContinuousExposure: false,
         supportsVideoStabilization: false
     )
 }
@@ -46,6 +50,24 @@ struct NormalizedCapturePoint: Codable, Equatable, Sendable {
     init(x: Double, y: Double) {
         self.x = min(max(x, 0), 1)
         self.y = min(max(y, 0), 1)
+    }
+}
+
+struct CapturePointAdjustmentResult: Equatable, Sendable {
+    let focusApplied: Bool
+    let exposureApplied: Bool
+
+    var didApplyAnyAdjustment: Bool {
+        focusApplied || exposureApplied
+    }
+}
+
+struct CaptureFocusExposureLockState: Equatable, Sendable {
+    let focusLocked: Bool
+    let exposureLocked: Bool
+
+    var isFullyLocked: Bool {
+        focusLocked && exposureLocked
     }
 }
 
@@ -111,6 +133,7 @@ enum CaptureSessionEvent: Sendable {
         configuration: CaptureConfiguration,
         capabilities: CaptureCapabilities
     )
+    case recordingStarted(recordingID: UUID)
     case duration(recordingID: UUID, seconds: TimeInterval)
     case recordingFinished(
         recordingID: UUID,

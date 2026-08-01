@@ -1,4 +1,3 @@
-import AVKit
 import SwiftUI
 
 struct CameraRecordingView: View {
@@ -6,8 +5,17 @@ struct CameraRecordingView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var recordingViewModel: CameraRecordingViewModel
     @StateObject private var teleprompterViewModel: TeleprompterViewModel
+    @StateObject private var localRecordingPlayer:
+        LocalRecordingPlayerController
     @State private var showsLocalPreview = false
     @State private var isClosing = false
+    @State private var focusRequest: CaptureFocusRequest?
+    @State private var focusIndicator: CaptureFocusIndicator?
+    @State private var focusIndicatorDismissTask: Task<Void, Never>?
+    @State private var focusOperationTask: Task<Void, Never>?
+    @State private var focusLockTask: Task<Void, Never>?
+
+    private static let focusCoordinateSpace = "camera-recording-focus"
 
     init(
         scriptID: UUID,
@@ -26,6 +34,21 @@ struct CameraRecordingView: View {
                 service: service
             )
         )
+#if DEBUG
+        let playerFactory: any LocalRecordingPlayerCreating =
+            dependencies.isUITestFake
+            ? FakeLocalRecordingPlayerFactory()
+            : SystemLocalRecordingPlayerFactory()
+#else
+        let playerFactory: any LocalRecordingPlayerCreating =
+            SystemLocalRecordingPlayerFactory()
+#endif
+        _localRecordingPlayer = StateObject(
+            wrappedValue: LocalRecordingPlayerController(
+                factory: playerFactory,
+                photos: dependencies.photos
+            )
+        )
     }
 
     var body: some View {
@@ -38,11 +61,29 @@ struct CameraRecordingView: View {
             ) { timeline in
                 ZStack {
                     previewLayer
-                    Color.black.opacity(0.18).ignoresSafeArea()
+                    Color.black.opacity(0.18)
+                        .ignoresSafeArea()
+                        .allowsHitTesting(false)
+
+                    focusTapSurface(in: geometry)
 
                     if let document = teleprompterViewModel.document,
                        !teleprompterViewModel.isEmpty {
                         promptText(document: document, in: geometry)
+                    }
+
+                    if let focusIndicator {
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(.yellow, lineWidth: 2)
+                            .frame(width: 64, height: 64)
+                            .position(focusIndicator.point)
+                            .allowsHitTesting(false)
+                            .accessibilityLabel(
+                                CameraRecordingStrings.focusIndicator
+                            )
+                            .accessibilityIdentifier(
+                                "capture.focusIndicator"
+                            )
                     }
 
                     VStack(spacing: 12) {
@@ -53,6 +94,7 @@ struct CameraRecordingView: View {
                     }
                     .padding()
                 }
+                .coordinateSpace(name: Self.focusCoordinateSpace)
                 .onChange(of: timeline.date) {
                     teleprompterViewModel.tick()
                 }
@@ -83,13 +125,25 @@ struct CameraRecordingView: View {
                 break
             }
         }
+        .onChange(
+            of: recordingViewModel.focusAndExposureFeedbackGeneration
+        ) {
+            clearFocusAndExposureFeedback()
+        }
         .onDisappear {
+            localRecordingPlayer.close()
+            clearFocusAndExposureFeedback()
             teleprompterViewModel.viewDidDisappear()
             Task {
                 await recordingViewModel.viewDidDisappear()
             }
         }
-        .sheet(isPresented: $showsLocalPreview) {
+        .sheet(
+            isPresented: $showsLocalPreview,
+            onDismiss: {
+                localRecordingPlayer.close()
+            }
+        ) {
             localPreview
         }
         .alert(
@@ -121,7 +175,8 @@ struct CameraRecordingView: View {
                 mirrored:
                     recordingViewModel.configuration?.previewMirrored
                     == true,
-                onFocus: recordingViewModel.focus,
+                focusRequest: focusRequest,
+                onFocus: handleConvertedFocus,
                 onRotationAngleChanged:
                     recordingViewModel.setCaptureRotationAngle
             )
@@ -169,7 +224,12 @@ struct CameraRecordingView: View {
             anchor: teleprompterViewModel.anchor,
             layoutRevision: teleprompterViewModel.layoutRevision,
             foregroundColor: .white,
-            onTapped: {},
+            onTapped: { pointInWindow in
+                handleFocusScreenTap(
+                    pointInWindow,
+                    in: geometry
+                )
+            },
             onDragStarted: teleprompterViewModel.beginDragging,
             onDragChanged: teleprompterViewModel.updateDragging,
             onDragEnded: teleprompterViewModel.endDragging,
@@ -285,6 +345,16 @@ struct CameraRecordingView: View {
                 .accessibilityIdentifier("capture.countdown")
         }
 
+        if case .awaitingRecordingStart = recordingViewModel.state {
+            ProgressView(CameraRecordingStrings.startingRecording)
+                .tint(.white)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(.black.opacity(0.65), in: Capsule())
+                .accessibilityIdentifier("capture.startingRecording")
+        }
+
         if recordingViewModel.state.isActivelyRecording {
             VStack(spacing: 4) {
                 Text(
@@ -329,6 +399,16 @@ struct CameraRecordingView: View {
                 .padding(8)
                 .background(.black.opacity(0.65), in: Capsule())
                 .accessibilityIdentifier("capture.notice")
+        }
+
+        if let notice =
+            recordingViewModel.focusAndExposureNoticeMessage {
+            Text(notice)
+                .font(.subheadline)
+                .foregroundStyle(.white)
+                .padding(8)
+                .background(.black.opacity(0.65), in: Capsule())
+                .accessibilityIdentifier("capture.focusNotice")
         }
 
         if recordingViewModel.canRetryPreparation {
@@ -391,6 +471,8 @@ struct CameraRecordingView: View {
                 recordingViewModel.startRecording()
             case .starting:
                 recordingViewModel.cancelCountdown()
+            case .awaitingRecordingStart:
+                break
             case .recording:
                 recordingViewModel.stopRecording()
             default:
@@ -408,7 +490,10 @@ struct CameraRecordingView: View {
 
     private var focusLockButton: some View {
         Button {
-            recordingViewModel.toggleFocusAndExposureLock()
+            focusLockTask?.cancel()
+            focusLockTask = Task {
+                await recordingViewModel.toggleFocusAndExposureLock()
+            }
         } label: {
             Image(
                 systemName:
@@ -419,16 +504,28 @@ struct CameraRecordingView: View {
         }
         .buttonStyle(.bordered)
         .tint(.white)
-        .disabled(
-            !recordingViewModel.capabilities.supportsFocusLock
-                && !recordingViewModel.capabilities.supportsExposureLock
+        .disabled(!recordingViewModel.canToggleFocusAndExposureLock)
+        .accessibilityLabel(
+            recordingViewModel.isFocusAndExposureLocked
+                ? CameraRecordingStrings.focusUnlock
+                : CameraRecordingStrings.focusLock
         )
-        .accessibilityLabel(CameraRecordingStrings.focusLock)
+        .accessibilityValue(
+            recordingViewModel.isFocusAndExposureLocked
+                ? CameraRecordingStrings.focusAndExposureLocked
+                : CameraRecordingStrings.focusUnlocked
+        )
         .accessibilityIdentifier("capture.focusLock")
     }
 
     private var previewButton: some View {
         Button {
+            guard let recording =
+                recordingViewModel.completedRecording
+            else {
+                return
+            }
+            localRecordingPlayer.open(recording)
             showsLocalPreview = true
         } label: {
             Image(systemName: "play.rectangle.fill")
@@ -443,61 +540,21 @@ struct CameraRecordingView: View {
 
     @ViewBuilder
     private var localPreview: some View {
-        NavigationStack {
-            if let recording = recordingViewModel.completedRecording {
-                VStack(spacing: 20) {
-#if DEBUG
-                    if recordingViewModel.isFakePreview {
-                        VStack(spacing: 12) {
-                            Label(
-                                CameraRecordingStrings.localPreview,
-                                systemImage: "checkmark.circle"
-                            )
-                            .font(.title2.bold())
-                            Text(CameraRecordingStrings.fakePreview)
-                                .multilineTextAlignment(.center)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: 240)
-                    } else {
-                        VideoPlayer(
-                            player: AVPlayer(url: recording.fileURL)
-                        )
-                        .aspectRatio(9 / 16, contentMode: .fit)
-                    }
-#else
-                    VideoPlayer(
-                        player: AVPlayer(url: recording.fileURL)
-                    )
-                    .aspectRatio(9 / 16, contentMode: .fit)
-#endif
-
-                    HStack {
-                        Button(CameraRecordingStrings.saveToPhotos) {
-                            recordingViewModel.saveToPhotos()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .accessibilityIdentifier("capture.savePhotos")
-
-                        ShareLink(
-                            item: recording.fileURL,
-                            preview: SharePreview(
-                                CameraRecordingStrings.localPreview
-                            )
-                        ) {
-                            Label(
-                                CameraRecordingStrings.share,
-                                systemImage: "square.and.arrow.up"
-                            )
-                        }
-                        .buttonStyle(.bordered)
-                        .accessibilityIdentifier("capture.share")
-                    }
-                }
-                .padding()
-                .navigationTitle(CameraRecordingStrings.localPreview)
-                .accessibilityIdentifier("capture.previewScreen")
-            }
+        if let recording = recordingViewModel.completedRecording {
+            LocalRecordingPreviewView(
+                controller: localRecordingPlayer,
+                recording: recording,
+                usesFakePreview: usesFakeLocalRecordingPreview
+            )
         }
+    }
+
+    private var usesFakeLocalRecordingPreview: Bool {
+#if DEBUG
+        recordingViewModel.isFakePreview
+#else
+        false
+#endif
     }
 
     private var errorBinding: Binding<Bool> {
@@ -509,6 +566,133 @@ struct CameraRecordingView: View {
                 }
             }
         )
+    }
+
+    private func focusTapSurface(
+        in geometry: GeometryProxy
+    ) -> some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .gesture(
+                SpatialTapGesture(
+                    count: 1,
+                    coordinateSpace: .named(Self.focusCoordinateSpace)
+                )
+                .onEnded { value in
+                    handleFocusTap(
+                        at: value.location,
+                        in: geometry
+                    )
+                }
+            )
+    }
+
+    private func handleFocusTap(
+        at localPoint: CGPoint,
+        in geometry: GeometryProxy
+    ) {
+        guard
+            !isClosing,
+            recordingViewModel.canAdjustFocusAndExposure
+        else {
+            return
+        }
+        let globalOrigin = geometry.frame(in: .global).origin
+        let request = CaptureFocusRequest(
+            id: UUID(),
+            screenPoint: CGPoint(
+                x: globalOrigin.x + localPoint.x,
+                y: globalOrigin.y + localPoint.y
+            ),
+            indicatorPoint: localPoint
+        )
+        focusRequest = request
+
+#if DEBUG
+        if recordingViewModel.isFakePreview {
+            let normalized = NormalizedCapturePoint(
+                x: localPoint.x / max(geometry.size.width, 1),
+                y: localPoint.y / max(geometry.size.height, 1)
+            )
+            performFocus(normalized, requestID: request.id)
+        }
+#endif
+    }
+
+    private func handleFocusScreenTap(
+        _ screenPoint: CGPoint,
+        in geometry: GeometryProxy
+    ) {
+        let globalOrigin = geometry.frame(in: .global).origin
+        let localPoint = CGPoint(
+            x: screenPoint.x - globalOrigin.x,
+            y: screenPoint.y - globalOrigin.y
+        )
+        guard CGRect(origin: .zero, size: geometry.size)
+            .contains(localPoint)
+        else {
+            return
+        }
+        handleFocusTap(at: localPoint, in: geometry)
+    }
+
+    private func handleConvertedFocus(
+        _ point: NormalizedCapturePoint,
+        requestID: UUID
+    ) {
+        performFocus(point, requestID: requestID)
+    }
+
+    private func performFocus(
+        _ point: NormalizedCapturePoint,
+        requestID: UUID
+    ) {
+        focusOperationTask?.cancel()
+        focusOperationTask = Task {
+            let didApply = await recordingViewModel.focus(at: point)
+            guard
+                didApply,
+                focusRequest?.id == requestID,
+                let indicatorPoint = focusRequest?.indicatorPoint
+            else {
+                return
+            }
+            showFocusIndicator(
+                CaptureFocusIndicator(
+                    id: requestID,
+                    point: indicatorPoint
+                )
+            )
+        }
+    }
+
+    private func clearFocusAndExposureFeedback() {
+        focusOperationTask?.cancel()
+        focusOperationTask = nil
+        focusLockTask?.cancel()
+        focusLockTask = nil
+        focusIndicatorDismissTask?.cancel()
+        focusIndicatorDismissTask = nil
+        focusRequest = nil
+        focusIndicator = nil
+    }
+
+    private func showFocusIndicator(
+        _ indicator: CaptureFocusIndicator
+    ) {
+        focusIndicatorDismissTask?.cancel()
+        focusIndicator = indicator
+        focusIndicatorDismissTask = Task {
+            do {
+                try await Task.sleep(for: .seconds(1))
+            } catch {
+                return
+            }
+            guard focusIndicator?.id == indicator.id else {
+                return
+            }
+            focusIndicator = nil
+        }
     }
 
     private var needsTeleprompterClock: Bool {
@@ -533,6 +717,8 @@ struct CameraRecordingView: View {
         switch recordingViewModel.state {
         case .starting:
             TeleprompterStrings.cancelCountdown
+        case .awaitingRecordingStart:
+            CameraRecordingStrings.startingRecording
         case .recording:
             CameraRecordingStrings.stop
         default:
@@ -544,6 +730,8 @@ struct CameraRecordingView: View {
         switch recordingViewModel.state {
         case .starting:
             "xmark.circle.fill"
+        case .awaitingRecordingStart:
+            "hourglass"
         case .recording:
             "stop.circle.fill"
         default:
@@ -589,6 +777,8 @@ struct CameraRecordingView: View {
                 : CameraRecordingStrings.completedAndReady
         case .starting(let seconds):
             "将在 \(seconds) 秒后开始录制"
+        case .awaitingRecordingStart:
+            CameraRecordingStrings.startingRecording
         case .recording:
             "正在录制"
         case .stopping:
@@ -620,4 +810,9 @@ struct CameraRecordingView: View {
             ? CameraRecordingStrings.ultraHD
             : CameraRecordingStrings.fullHD
     }
+}
+
+private struct CaptureFocusIndicator: Equatable {
+    let id: UUID
+    let point: CGPoint
 }

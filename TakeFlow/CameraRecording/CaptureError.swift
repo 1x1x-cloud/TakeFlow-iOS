@@ -7,6 +7,7 @@ enum CaptureError: Error, Equatable, Sendable {
     case cameraUnavailable
     case microphoneUnavailable
     case preparationTimedOut
+    case recordingStartTimedOut
     case unsupportedConfiguration
     case invalidTransition
     case alreadyRecording
@@ -43,6 +44,8 @@ extension CaptureError: LocalizedError {
             "当前没有可用麦克风，录制尚未开始。"
         case .preparationTimedOut:
             "摄像头准备超时。请确认没有其他 App 占用摄像头，然后重新尝试。"
+        case .recordingStartTimedOut:
+            "录制启动超时，媒体尚未开始写入。请重新准备摄像头后再试。"
         case .unsupportedConfiguration:
             "当前设备不支持所选录制配置。"
         case .invalidTransition:

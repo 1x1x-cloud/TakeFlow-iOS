@@ -440,7 +440,7 @@ final class TeleprompterTextLayoutPerformanceTests: XCTestCase {
             anchor: anchor,
             layoutRevision: layoutRevision,
             foregroundColor: .white,
-            onTapped: {},
+            onTapped: { _ in },
             onDragStarted: {},
             onDragChanged: { _, _ in },
             onDragEnded: { _, _ in },
