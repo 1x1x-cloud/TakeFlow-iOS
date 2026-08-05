@@ -302,8 +302,20 @@ final class LocalRecordingPlayerControllerTests: XCTestCase {
         XCTAssertTrue(fixture.controller.canControlPlayback)
     }
 
-    func testSaveFailureShowsErrorAndAllowsRetry() async throws {
+    func testNonPermissionPhotoWriteFailureKeepsRecordingPreviewShareAndRetryAvailable()
+        async throws
+    {
         let fixture = makePhotoSaveFixture()
+        let fileURL = fixture.recording.fileURL
+        try Data("recording-source".utf8).write(
+            to: fileURL,
+            options: .atomic
+        )
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+        fixture.controller.togglePlayback()
+        XCTAssertEqual(fixture.controller.playbackState, .playing)
 
         fixture.controller.saveToPhotos()
         try await waitForSaveCalls(1, photos: fixture.photos)
@@ -320,6 +332,34 @@ final class LocalRecordingPlayerControllerTests: XCTestCase {
         )
         XCTAssertTrue(fixture.controller.canSaveToPhotos)
         XCTAssertTrue(fixture.controller.canControlPlayback)
+        XCTAssertEqual(
+            fixture.controller.fileURL,
+            fileURL.standardizedFileURL
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.path))
+        XCTAssertEqual(fixture.factory.sessions.count, 1)
+        XCTAssertEqual(fixture.factory.activeSessionCount, 1)
+        XCTAssertEqual(fixture.factory.maximumActiveSessionCount, 1)
+
+        fixture.controller.togglePlayback()
+        XCTAssertEqual(fixture.controller.playbackState, .playing)
+        fixture.controller.pauseForExternalAction()
+        XCTAssertEqual(fixture.controller.playbackState, .paused)
+
+        fixture.controller.saveToPhotos()
+        fixture.controller.saveToPhotos()
+        try await waitForSaveCalls(2, photos: fixture.photos)
+        let saveCallCount = await fixture.photos.saveCallCount
+        XCTAssertEqual(saveCallCount, 2)
+        XCTAssertEqual(fixture.controller.photoSaveState, .saving)
+        XCTAssertFalse(fixture.controller.canSaveToPhotos)
+        XCTAssertEqual(fixture.factory.sessions.count, 1)
+        XCTAssertEqual(fixture.factory.maximumActiveSessionCount, 1)
+
+        await fixture.photos.completeNext(with: .saved)
+        try await waitForPhotoState(.saved, controller: fixture.controller)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.path))
+        XCTAssertEqual(fixture.factory.activeSessionCount, 1)
     }
 
     func testPermissionRepairCanRetryAndReachSaved() async throws {
