@@ -246,6 +246,33 @@ struct RecordingStateMachine: Sendable {
         }
     }
 
+    mutating func updateInterruptionReason(
+        _ reason: CaptureInterruptionReason
+    ) {
+        switch state {
+        case .interrupted(let recordingID, _):
+            state = .interrupted(recordingID: recordingID, reason: reason)
+        case .recoveryRequired:
+            state = .recoveryRequired(reason: reason)
+        default:
+            break
+        }
+    }
+
+    mutating func requireRecovery(
+        reason: CaptureInterruptionReason
+    ) throws {
+        switch state {
+        case .interrupted, .recoveryRequired, .failed:
+            activeInterruptionSources.removeAll()
+            endedSourcesAwaitingBegin.removeAll()
+            interruptedRecordingWasFinalized = true
+            state = .recoveryRequired(reason: reason)
+        default:
+            throw CaptureError.invalidTransition
+        }
+    }
+
     mutating func fail(_ error: CaptureError) {
         activeInterruptionSources.removeAll()
         endedSourcesAwaitingBegin.removeAll()

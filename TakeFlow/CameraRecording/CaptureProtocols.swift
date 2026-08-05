@@ -48,8 +48,30 @@ protocol RecordingFileStoring: Sendable {
         _ recording: PendingRecording,
         reason: CaptureInterruptionReason
     ) async throws -> RecoverableRecording
+    /// Includes durable recoverables and atomically promotes non-empty orphan
+    /// recordings found during launch/new-lifecycle recovery.
     func recoverPendingRecordings() async -> [RecoverableRecording]
+    /// Returns only records whose recoverable/damaged manifest was already
+    /// durably committed. This is safe for an active foreground reconciliation.
+    func recoverCommittedRecordings() async -> [RecoverableRecording]
+    func retainRecoverableRecording(
+        _ recording: RecoverableRecording,
+        duration: TimeInterval
+    ) async throws -> CompletedRecording
+    func markRecoverableRecordingDamaged(
+        _ recording: RecoverableRecording
+    ) async throws -> RecoverableRecording
+    func deleteRecoverableRecording(
+        projectID: UUID,
+        recordingID: UUID
+    ) async throws
     func deleteProject(projectID: UUID) async throws
+}
+
+protocol RecoverableMediaValidating: Sendable {
+    func validate(
+        _ recording: RecoverableRecording
+    ) async -> RecoverableMediaValidationResult
 }
 
 protocol StorageSpaceChecking: Sendable {
@@ -66,6 +88,24 @@ protocol AudioSessionServicing: Sendable {
     func activateForRecording() async throws
     func deactivateAfterRecording() async
     func events() async -> AsyncStream<AudioSessionEvent>
+}
+
+struct RecordingBackgroundTaskToken: Hashable, Sendable {
+    let id: UUID
+
+    init(id: UUID = UUID()) {
+        self.id = id
+    }
+}
+
+/// Grants only the finite execution time needed to finalize an interrupted
+/// recording. It never authorizes recording to continue in the background.
+@MainActor
+protocol RecordingBackgroundTaskManaging: AnyObject {
+    func beginRecordingFinalization(
+        expirationHandler: @escaping @MainActor @Sendable () -> Void
+    ) -> RecordingBackgroundTaskToken?
+    func endRecordingFinalization(_ token: RecordingBackgroundTaskToken)
 }
 
 struct RecordingStoragePolicy: Equatable, Sendable {
@@ -97,6 +137,20 @@ struct CompletedRecording: Codable, Equatable, Sendable {
     let fileURL: URL
     let duration: TimeInterval
     let completedAt: Date
+    var origin: CompletedRecordingOrigin? = nil
+
+    var isInterruptedRecovery: Bool {
+        origin == .interruptedRecovery
+    }
+}
+
+enum CompletedRecordingOrigin: String, Codable, Sendable {
+    case interruptedRecovery
+}
+
+enum RecoverableRecordingDisposition: String, Codable, Sendable {
+    case pendingReview
+    case damaged
 }
 
 struct RecoverableRecording: Codable, Equatable, Sendable {
@@ -105,4 +159,41 @@ struct RecoverableRecording: Codable, Equatable, Sendable {
     let fileURL: URL
     let reason: CaptureInterruptionReason
     let discoveredAt: Date
+    var disposition: RecoverableRecordingDisposition = .pendingReview
+}
+
+struct RecoverableMediaInfo: Equatable, Sendable {
+    let duration: TimeInterval
+    let hasAudioTrack: Bool
+}
+
+enum RecoverableMediaValidationFailure: Equatable, Sendable {
+    case fileMissing
+    case containerUnrecognized
+    case videoTrackMissing
+    case durationInvalid
+    case notPlayable
+}
+
+enum RecoverableMediaValidationResult: Equatable, Sendable {
+    case playable(RecoverableMediaInfo)
+    case invalid(RecoverableMediaValidationFailure)
+}
+
+enum RecoverableRecordingReviewState: Equatable, Sendable {
+    case pending
+    case validating
+    case playable(RecoverableMediaInfo)
+    case damaged(RecoverableMediaValidationFailure)
+    case retaining(RecoverableMediaInfo)
+    case retained(CompletedRecording, RecoverableMediaInfo)
+    case deleting
+    case operationFailed(String, RecoverableMediaInfo?)
+}
+
+struct RecoverableRecordingReviewItem: Identifiable, Equatable, Sendable {
+    let recording: RecoverableRecording
+    var state: RecoverableRecordingReviewState
+
+    var id: UUID { recording.recordingID }
 }

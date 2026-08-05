@@ -143,11 +143,18 @@ final class LocalRecordingPlayerController: ObservableObject {
     }
 
     func open(_ recording: CompletedRecording) {
-        let normalizedURL = recording.fileURL.standardizedFileURL
+        open(
+            recordingID: recording.recordingID,
+            fileURL: recording.fileURL
+        )
+    }
+
+    func open(recordingID: UUID, fileURL: URL) {
+        let normalizedURL = fileURL.standardizedFileURL
         guard
             session == nil
-                || recordingID != recording.recordingID
-                || fileURL != normalizedURL
+                || self.recordingID != recordingID
+                || self.fileURL != normalizedURL
         else {
             return
         }
@@ -167,8 +174,8 @@ final class LocalRecordingPlayerController: ObservableObject {
             self.playbackState = state
         }
         session = newSession
-        recordingID = recording.recordingID
-        fileURL = normalizedURL
+        self.recordingID = recordingID
+        self.fileURL = normalizedURL
         playbackState = newSession.state
 #if DEBUG
         sessionCreationCount += 1
@@ -452,6 +459,18 @@ struct LocalRecordingPreviewView: View {
                     )
                     .accessibilityIdentifier("capture.previewScreen")
 
+                if recording.isInterruptedRecovery {
+                    Label(
+                        CameraRecordingStrings.recoverableWarning,
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.headline)
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier(
+                        "capture.retainedRecoveryWarning"
+                    )
+                }
+
                 playerSurface
 
                 Button {
@@ -663,6 +682,313 @@ struct LocalRecordingPreviewView: View {
         case .permissionDenied, .failed:
             .orange
         }
+    }
+}
+
+struct RecoverableRecordingReviewView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var controller: LocalRecordingPlayerController
+
+    let item: RecoverableRecordingReviewItem
+    let usesFakePreview: Bool
+    let onRetain: @MainActor () async -> Bool
+    let onDelete: @MainActor () async -> Bool
+
+    @State private var showsShareSheet = false
+    @State private var showsDeleteConfirmation = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 18) {
+                    Label(
+                        CameraRecordingStrings.recoverableWarning,
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.headline)
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("capture.recoveryWarning")
+
+                    Text(
+                        CameraRecordingStrings.recoverableReason(
+                            item.recording.reason
+                        )
+                    )
+                    Text(
+                        item.recording.discoveredAt.formatted(
+                            date: .abbreviated,
+                            time: .shortened
+                        )
+                    )
+                    .foregroundStyle(.secondary)
+
+                    playerSurface
+
+                    if let mediaInfo {
+                        Label(
+                            mediaInfo.hasAudioTrack
+                                ? CameraRecordingStrings.recoverableHasAudio
+                                : CameraRecordingStrings.recoverableMissingAudio,
+                            systemImage: mediaInfo.hasAudioTrack
+                                ? "speaker.wave.2.fill" : "speaker.slash.fill"
+                        )
+                        .foregroundStyle(
+                            mediaInfo.hasAudioTrack
+                                ? Color.secondary : Color.orange
+                        )
+                        .accessibilityIdentifier("capture.recoveryAudioStatus")
+
+                        Button {
+                            controller.togglePlayback()
+                        } label: {
+                            Label(
+                                playbackButtonTitle,
+                                systemImage:
+                                    controller.playbackState.isActivelyPlaying
+                                    ? "pause.fill" : "play.fill"
+                            )
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!controller.canControlPlayback)
+                        .accessibilityIdentifier(
+                            "capture.recoveryPlayback"
+                        )
+                    }
+
+                    stateMessage
+
+                    if case .retained = item.state {
+                        retainedActions
+                    } else {
+                        reviewActions
+                    }
+                }
+                .padding()
+            }
+            .navigationTitle(CameraRecordingStrings.inspectRecoverable)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(CameraRecordingStrings.recoverableLater) {
+                        controller.close()
+                        dismiss()
+                    }
+                    .accessibilityIdentifier("capture.recoveryLater")
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("capture.recoveryReviewSheet")
+        .presentationDragIndicator(.visible)
+        .onAppear(perform: openCurrentRecording)
+        .onChange(of: item) {
+            openCurrentRecording()
+        }
+        .onDisappear {
+            controller.close()
+        }
+        .confirmationDialog(
+            CameraRecordingStrings.deleteRecoverableTitle,
+            isPresented: $showsDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(
+                CameraRecordingStrings.deleteRecoverable,
+                role: .destructive
+            ) {
+                controller.close()
+                Task {
+                    if await onDelete() {
+                        dismiss()
+                    }
+                }
+            }
+            Button(ScriptEditorStrings.cancel, role: .cancel) {}
+        } message: {
+            Text(CameraRecordingStrings.deleteRecoverableMessage)
+        }
+        .sheet(isPresented: $showsShareSheet) {
+            LocalRecordingActivityView(
+                activityItems: [currentFileURL]
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var playerSurface: some View {
+#if DEBUG
+        if usesFakePreview {
+            Label(
+                CameraRecordingStrings.recoverableWarning,
+                systemImage: "video.fill"
+            )
+            .frame(maxWidth: .infinity, minHeight: 220)
+        } else {
+            systemPlayerSurface
+        }
+#else
+        systemPlayerSurface
+#endif
+    }
+
+    @ViewBuilder
+    private var systemPlayerSurface: some View {
+        if let player = controller.player {
+            VideoPlayer(player: player)
+                .aspectRatio(9 / 16, contentMode: .fit)
+        } else {
+            ContentUnavailableView(
+                CameraRecordingStrings.recoverableUnavailable,
+                systemImage: "video.slash"
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var stateMessage: some View {
+        switch item.state {
+        case .retaining:
+            ProgressView(CameraRecordingStrings.recoverableRetaining)
+                .accessibilityIdentifier("capture.recoveryOperation")
+        case .deleting:
+            ProgressView(CameraRecordingStrings.recoverableDeleting)
+                .accessibilityIdentifier("capture.recoveryOperation")
+        case .retained:
+            Label(
+                CameraRecordingStrings.recoverableRetained,
+                systemImage: "checkmark.circle.fill"
+            )
+            .foregroundStyle(.green)
+            .accessibilityIdentifier("capture.recoveryRetained")
+        case .damaged(let failure):
+            Label(
+                CameraRecordingStrings.recoverableValidationMessage(
+                    failure
+                ),
+                systemImage: "video.slash.fill"
+            )
+            .foregroundStyle(.orange)
+            .accessibilityIdentifier("capture.recoveryDamaged")
+        case .operationFailed(let message, _):
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .accessibilityIdentifier("capture.recoveryError")
+        default:
+            EmptyView()
+        }
+    }
+
+    private var reviewActions: some View {
+        HStack {
+            Button(CameraRecordingStrings.retainRecoverable) {
+                controller.close()
+                Task { _ = await onRetain() }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!allowsRetain)
+            .accessibilityIdentifier("capture.recoveryRetain")
+
+            Button(
+                CameraRecordingStrings.deleteRecoverable,
+                role: .destructive
+            ) {
+                showsDeleteConfirmation = true
+            }
+            .buttonStyle(.bordered)
+            .disabled(isOperationInProgress)
+            .accessibilityIdentifier("capture.recoveryDelete")
+        }
+    }
+
+    private var retainedActions: some View {
+        VStack(spacing: 10) {
+            if let message = controller.photoSaveState.statusMessage {
+                Text(message)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(message)
+                    .accessibilityIdentifier(
+                        "capture.recoveryPhotoSaveStatus"
+                    )
+            }
+            HStack {
+                Button {
+                    controller.saveToPhotos()
+                } label: {
+                    Text(controller.photoSaveState.buttonTitle)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!controller.canSaveToPhotos)
+                .accessibilityLabel(controller.photoSaveState.buttonTitle)
+
+                Button(CameraRecordingStrings.share) {
+                    controller.pauseForExternalAction()
+                    showsShareSheet = true
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    private func openCurrentRecording() {
+        switch item.state {
+        case .retaining, .deleting:
+            controller.close()
+            return
+        default:
+            break
+        }
+        guard mediaInfo != nil else {
+            controller.close()
+            return
+        }
+        controller.open(
+            recordingID: item.recording.recordingID,
+            fileURL: currentFileURL
+        )
+    }
+
+    private var currentFileURL: URL {
+        if case .retained(let recording, _) = item.state {
+            return recording.fileURL
+        }
+        return item.recording.fileURL
+    }
+
+    private var mediaInfo: RecoverableMediaInfo? {
+        switch item.state {
+        case .playable(let info), .retaining(let info),
+             .retained(_, let info):
+            info
+        case .operationFailed(_, let info):
+            info
+        default:
+            nil
+        }
+    }
+
+    private var allowsRetain: Bool {
+        switch item.state {
+        case .playable, .operationFailed(_, .some):
+            true
+        default:
+            false
+        }
+    }
+
+    private var isOperationInProgress: Bool {
+        switch item.state {
+        case .retaining, .deleting:
+            true
+        default:
+            false
+        }
+    }
+
+    private var playbackButtonTitle: String {
+        controller.playbackState.isActivelyPlaying
+            ? CameraRecordingStrings.pausePreview
+            : CameraRecordingStrings.playPreview
     }
 }
 

@@ -1,9 +1,26 @@
+@preconcurrency import AVFAudio
 import Foundation
 import XCTest
 @testable import TakeFlow
 
 @MainActor
 final class CameraRecordingViewModelTests: XCTestCase {
+    private func makeRecoverable(
+        projectID: UUID = UUID(),
+        recordingID: UUID = UUID(),
+        discoveredAt: Date = Date(),
+        disposition: RecoverableRecordingDisposition = .pendingReview
+    ) -> RecoverableRecording {
+        RecoverableRecording(
+            projectID: projectID,
+            recordingID: recordingID,
+            fileURL: URL(fileURLWithPath: "/tmp/\(recordingID).recording.mov"),
+            reason: .unknown,
+            discoveredAt: discoveredAt,
+            disposition: disposition
+        )
+    }
+
     func testAuthorizedPermissionsConfigureReadyPreview() async throws {
         let fixture = makeFixture()
         let viewModel = fixture.viewModel
@@ -301,12 +318,13 @@ final class CameraRecordingViewModelTests: XCTestCase {
         await capture.setSuspendsPreview(false)
         await fixture.viewModel.retryPreparation()
         try await waitUntil { fixture.viewModel.state == .ready }
-        await capture.resumeSuspendedPreviews()
         await firstPreparation.value
 
         XCTAssertEqual(fixture.viewModel.state, .ready)
         let configureCount = await capture.configureCount
         XCTAssertEqual(configureCount, 2)
+        let configuredSessionIDs = await capture.configuredSessionIDs
+        XCTAssertEqual(Set(configuredSessionIDs).count, 2)
     }
 
     func testBackgroundInterruptionThenReentryDoesNotRemainPreparing()
@@ -318,10 +336,8 @@ final class CameraRecordingViewModelTests: XCTestCase {
         try await waitUntil { first.state == .ready }
         first.sceneDidEnterBackground()
         try await waitUntil {
-            if case .interrupted = first.state {
-                return true
-            }
-            return false
+            first.state
+                == .recoveryRequired(reason: .applicationBackgrounded)
         }
         first.sceneDidBecomeActive()
         await first.viewDidDisappear()
@@ -381,8 +397,10 @@ final class CameraRecordingViewModelTests: XCTestCase {
 
         let stopRecordingCount = await capture.stopRecordingCount
         let completeCount = await files.completeCount
+        let preserveCount = await files.preserveCount
         XCTAssertEqual(stopRecordingCount, 1)
         XCTAssertEqual(completeCount, 1)
+        XCTAssertEqual(preserveCount, 0)
         XCTAssertNotNil(fixture.viewModel.completedRecording)
         XCTAssertTrue(fixture.viewModel.canSwitchCamera)
         XCTAssertTrue(fixture.viewModel.canStartRecording)
@@ -537,13 +555,14 @@ final class CameraRecordingViewModelTests: XCTestCase {
             reason: .videoDeviceInUseByAnotherClient
         )
         try await waitUntil {
-            if case .interrupted = fixture.viewModel.state {
-                return true
-            }
-            return false
+            fixture.viewModel.state
+                == .recoveryRequired(
+                    reason: .videoDeviceInUseByAnotherClient
+                )
         }
         XCTAssertFalse(fixture.viewModel.canSwitchCamera)
-        XCTAssertFalse(fixture.viewModel.canRetryPreparation)
+        XCTAssertTrue(fixture.viewModel.canRetryPreparation)
+        XCTAssertTrue(fixture.viewModel.shouldShowManualReprepare)
 
         await capture.endCurrentInterruption()
         try await waitUntil {
@@ -648,13 +667,22 @@ final class CameraRecordingViewModelTests: XCTestCase {
         }
 
         await audio.emit(
-            .interruptionBegan,
+            .interruptionBegan(.unspecified),
+            to: firstSubscriptionID
+        )
+        await audio.emit(
+            .mediaServicesWereLost,
+            to: firstSubscriptionID
+        )
+        await audio.emit(
+            .mediaServicesWereReset,
             to: firstSubscriptionID
         )
         try? await Task.sleep(for: .milliseconds(30))
 
         XCTAssertEqual(fixture.viewModel.state, .ready)
         XCTAssertTrue(fixture.viewModel.canSwitchCamera)
+        XCTAssertNil(fixture.viewModel.interruptionEpisode)
     }
 
     func testFiftyCompletedRecordingAndCameraSwitchCyclesStayReady()
@@ -826,6 +854,272 @@ final class CameraRecordingViewModelTests: XCTestCase {
         let preserveCount = await files.preserveCount
         XCTAssertEqual(preserveCount, 1)
         XCTAssertNil(fixture.viewModel.completedRecording)
+    }
+
+    func testRecoveryScanExposesEveryPendingRecording() async throws {
+        let files = TestRecordingFileStore()
+        let recordings = [makeRecoverable(), makeRecoverable(), makeRecoverable()]
+        await files.setPendingRecoverables(recordings)
+        let fixture = makeFixture(files: files)
+
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+
+        XCTAssertEqual(
+            Set(fixture.viewModel.recoverableReviewItems.map(\.id)),
+            Set(recordings.map(\.recordingID))
+        )
+    }
+
+    func testPlayableRecoveryValidationPublishesDurationAndAudio()
+        async throws
+    {
+        let files = TestRecordingFileStore()
+        let validator = TestRecoverableMediaValidator()
+        let recording = makeRecoverable()
+        await files.setPendingRecoverables([recording])
+        await validator.setResult(
+            .playable(
+                RecoverableMediaInfo(duration: 4.5, hasAudioTrack: true)
+            ),
+            for: recording.recordingID
+        )
+        let fixture = makeFixture(
+            files: files,
+            recoverableMediaValidator: validator
+        )
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+
+        let result = await fixture.viewModel.validateRecoverableRecording(
+            recordingID: recording.recordingID
+        )
+
+        XCTAssertTrue(result)
+        XCTAssertEqual(
+            fixture.viewModel.recoverableReviewItems.first?.state,
+            .playable(
+                RecoverableMediaInfo(duration: 4.5, hasAudioTrack: true)
+            )
+        )
+    }
+
+    func testRecoveryWithoutAudioRemainsPlayableWithExplicitMetadata()
+        async throws
+    {
+        let files = TestRecordingFileStore()
+        let validator = TestRecoverableMediaValidator()
+        let recording = makeRecoverable()
+        await files.setPendingRecoverables([recording])
+        await validator.setResult(
+            .playable(
+                RecoverableMediaInfo(duration: 2, hasAudioTrack: false)
+            ),
+            for: recording.recordingID
+        )
+        let fixture = makeFixture(
+            files: files,
+            recoverableMediaValidator: validator
+        )
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+
+        let validated = await fixture.viewModel.validateRecoverableRecording(
+            recordingID: recording.recordingID
+        )
+        XCTAssertTrue(validated)
+        XCTAssertEqual(
+            fixture.viewModel.recoverableReviewItems.first?.state,
+            .playable(
+                RecoverableMediaInfo(duration: 2, hasAudioTrack: false)
+            )
+        )
+    }
+
+    func testDamagedAndZeroDurationRecoveriesAreNotPlayable()
+        async throws
+    {
+        for failure in [
+            RecoverableMediaValidationFailure.containerUnrecognized,
+            .durationInvalid
+        ] {
+            let files = TestRecordingFileStore()
+            let validator = TestRecoverableMediaValidator()
+            let recording = makeRecoverable()
+            await files.setPendingRecoverables([recording])
+            await validator.setResult(
+                .invalid(failure),
+                for: recording.recordingID
+            )
+            let fixture = makeFixture(
+                files: files,
+                recoverableMediaValidator: validator
+            )
+            await fixture.viewModel.prepare()
+            try await waitUntil { fixture.viewModel.state == .ready }
+
+            let validated = await fixture.viewModel
+                .validateRecoverableRecording(
+                    recordingID: recording.recordingID
+                )
+            XCTAssertFalse(validated)
+            XCTAssertEqual(
+                fixture.viewModel.recoverableReviewItems.first?.state,
+                .damaged(failure)
+            )
+        }
+    }
+
+    func testRepeatedValidationRequestRunsOnlyOnce() async throws {
+        let files = TestRecordingFileStore()
+        let validator = TestRecoverableMediaValidator()
+        let recording = makeRecoverable()
+        await files.setPendingRecoverables([recording])
+        await validator.setSuspended(true, for: recording.recordingID)
+        let fixture = makeFixture(
+            files: files,
+            recoverableMediaValidator: validator
+        )
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+
+        let first = Task {
+            await fixture.viewModel.validateRecoverableRecording(
+                recordingID: recording.recordingID
+            )
+        }
+        try await waitUntil {
+            fixture.viewModel.recoverableReviewItems.first?.state
+                == .validating
+        }
+        let second = await fixture.viewModel.validateRecoverableRecording(
+            recordingID: recording.recordingID
+        )
+        await validator.setSuspended(false, for: recording.recordingID)
+        _ = await first.value
+
+        XCTAssertFalse(second)
+        let validationCount = await validator.validationCount(
+            for: recording.recordingID
+        )
+        XCTAssertEqual(validationCount, 1)
+    }
+
+    func testRetainingRecoveryWritesMediaDurationAndInterruptedOrigin()
+        async throws
+    {
+        let files = TestRecordingFileStore()
+        let recording = makeRecoverable()
+        await files.setPendingRecoverables([recording])
+        let fixture = makeFixture(files: files)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        let validated = await fixture.viewModel.validateRecoverableRecording(
+            recordingID: recording.recordingID
+        )
+        XCTAssertTrue(validated)
+
+        let retained = await fixture.viewModel.retainRecoverableRecording(
+            recordingID: recording.recordingID
+        )
+        XCTAssertTrue(retained)
+
+        XCTAssertEqual(
+            fixture.viewModel.completedRecording?.origin,
+            .interruptedRecovery
+        )
+        XCTAssertEqual(fixture.viewModel.completedRecording?.duration, 2)
+        let retainedIDs = await files.retainedIDs()
+        XCTAssertEqual(retainedIDs, [recording.recordingID])
+    }
+
+    func testRetainFailureKeepsRecoveryAvailable() async throws {
+        let files = TestRecordingFileStore()
+        let recording = makeRecoverable()
+        await files.setPendingRecoverables([recording])
+        await files.setShouldFailRetain(true)
+        let fixture = makeFixture(files: files)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        _ = await fixture.viewModel.validateRecoverableRecording(
+            recordingID: recording.recordingID
+        )
+
+        let retained = await fixture.viewModel.retainRecoverableRecording(
+            recordingID: recording.recordingID
+        )
+        XCTAssertFalse(retained)
+        XCTAssertNotNil(
+            fixture.viewModel.recoverableItem(
+                recordingID: recording.recordingID
+            )
+        )
+        let retainedIDs = await files.retainedIDs()
+        XCTAssertTrue(retainedIDs.isEmpty)
+    }
+
+    func testDeleteRecoveryTargetsOnlySelectedRecordingAndCanRetry()
+        async throws
+    {
+        let files = TestRecordingFileStore()
+        let first = makeRecoverable()
+        let second = makeRecoverable()
+        await files.setPendingRecoverables([first, second])
+        let fixture = makeFixture(files: files)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        await files.setShouldFailDelete(true)
+
+        let firstDeletion = await fixture.viewModel
+            .deleteRecoverableRecording(recordingID: first.recordingID)
+        XCTAssertFalse(firstDeletion)
+        XCTAssertEqual(fixture.viewModel.recoverableReviewItems.count, 2)
+
+        await files.setShouldFailDelete(false)
+        let secondDeletion = await fixture.viewModel
+            .deleteRecoverableRecording(recordingID: first.recordingID)
+        XCTAssertTrue(secondDeletion)
+        XCTAssertEqual(
+            fixture.viewModel.recoverableReviewItems.map(\.id),
+            [second.recordingID]
+        )
+    }
+
+    func testLateValidationFromOldLifecycleCannotOverwriteNewScan()
+        async throws
+    {
+        let files = TestRecordingFileStore()
+        let validator = TestRecoverableMediaValidator()
+        let recording = makeRecoverable()
+        await files.setPendingRecoverables([recording])
+        await validator.setSuspended(true, for: recording.recordingID)
+        let fixture = makeFixture(
+            files: files,
+            recoverableMediaValidator: validator
+        )
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        let oldValidation = Task {
+            await fixture.viewModel.validateRecoverableRecording(
+                recordingID: recording.recordingID
+            )
+        }
+        try await waitUntil {
+            fixture.viewModel.recoverableReviewItems.first?.state
+                == .validating
+        }
+
+        await fixture.viewModel.viewDidDisappear()
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        await validator.setSuspended(false, for: recording.recordingID)
+        let oldResult = await oldValidation.value
+        XCTAssertFalse(oldResult)
+
+        XCTAssertEqual(
+            fixture.viewModel.recoverableReviewItems.first?.state,
+            .pending
+        )
     }
 
     func testBackgroundStopsAndForegroundDoesNotAutoResume()
@@ -1046,10 +1340,10 @@ final class CameraRecordingViewModelTests: XCTestCase {
             reason: .videoDeviceInUseByAnotherClient
         )
         try await waitUntil {
-            if case .interrupted = interrupted.state {
-                return true
-            }
-            return false
+            interrupted.state
+                == .recoveryRequired(
+                    reason: .videoDeviceInUseByAnotherClient
+                )
         }
         let interruptedApplied = await interrupted.focus(
             at: NormalizedCapturePoint(x: 0.5, y: 0.5)
@@ -1248,30 +1542,113 @@ final class CameraRecordingViewModelTests: XCTestCase {
         async throws
     {
         let capture = TestCaptureSession()
-        let fixture = makeFixture(capture: capture)
+        let audio = TestAudioSession()
+        let fixture = makeFixture(capture: capture, audio: audio)
+        recordLifecycleTestStage(
+            "first_prepare_begin",
+            viewModel: fixture.viewModel
+        )
         await fixture.viewModel.prepare()
+        recordLifecycleTestStage(
+            "first_prepare_returned",
+            viewModel: fixture.viewModel
+        )
         try await waitUntil { fixture.viewModel.state == .ready }
         await fixture.viewModel.toggleFocusAndExposureLock()
 
         await capture.interruptCurrentSession(
             reason: .videoDeviceInUseByAnotherClient
         )
+        recordLifecycleTestStage(
+            "waiting_for_recovery_required",
+            viewModel: fixture.viewModel
+        )
         try await waitUntil {
-            if case .interrupted = fixture.viewModel.state {
-                return true
-            }
-            return false
+            fixture.viewModel.state
+                == .recoveryRequired(
+                    reason: .videoDeviceInUseByAnotherClient
+                )
         }
+        recordLifecycleTestStage(
+            "recovery_required_reached",
+            viewModel: fixture.viewModel
+        )
         XCTAssertFalse(fixture.viewModel.isFocusAndExposureLocked)
         XCTAssertNil(fixture.viewModel.focusAndExposureNoticeMessage)
-        XCTAssertNotNil(fixture.viewModel.noticeMessage)
+        XCTAssertNotNil(fixture.viewModel.interruptionNoticeMessage)
+
+        recordLifecycleTestStage(
+            "view_did_disappear_begin",
+            viewModel: fixture.viewModel
+        )
+        await fixture.viewModel.viewDidDisappear()
+        recordLifecycleTestStage(
+            "view_did_disappear_returned",
+            viewModel: fixture.viewModel
+        )
+        let closedCaptureStreamCount =
+            await capture.activeEventStreamCount()
+        let closedAudioStreamCount = await audio.activeEventStreamCount()
+        XCTAssertEqual(closedCaptureStreamCount, 0)
+        XCTAssertEqual(closedAudioStreamCount, 0)
+
+        recordLifecycleTestStage(
+            "second_prepare_begin",
+            viewModel: fixture.viewModel
+        )
+        await fixture.viewModel.prepare()
+        recordLifecycleTestStage(
+            "second_prepare_returned",
+            viewModel: fixture.viewModel
+        )
+        try await waitUntil { fixture.viewModel.state == .ready }
+        recordLifecycleTestStage(
+            "second_session_ready",
+            viewModel: fixture.viewModel
+        )
+
+        XCTAssertFalse(fixture.viewModel.isFocusAndExposureLocked)
+        XCTAssertNil(fixture.viewModel.focusAndExposureNoticeMessage)
+        let newCaptureStreamCount = await capture.activeEventStreamCount()
+        let newAudioStreamCount = await audio.activeEventStreamCount()
+        XCTAssertEqual(newCaptureStreamCount, 1)
+        XCTAssertEqual(newAudioStreamCount, 1)
+        let configuredSessionIDs = await capture.configuredSessionIDs
+        XCTAssertEqual(configuredSessionIDs.count, 2)
+        XCTAssertNotEqual(
+            configuredSessionIDs.first,
+            configuredSessionIDs.last
+        )
+    }
+
+    func testExitDuringSuspendedPreparationDrainsOldLifecycle()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        await capture.setSuspendsPreview(true)
+        let audio = TestAudioSession()
+        let fixture = makeFixture(capture: capture, audio: audio)
+
+        let firstPreparation = Task {
+            await fixture.viewModel.prepare()
+        }
+        try await waitUntil {
+            await capture.suspendedPreviewCount() == 1
+        }
 
         await fixture.viewModel.viewDidDisappear()
+        await firstPreparation.value
+        let closedCaptureStreamCount =
+            await capture.activeEventStreamCount()
+        let closedAudioStreamCount = await audio.activeEventStreamCount()
+        XCTAssertEqual(closedCaptureStreamCount, 0)
+        XCTAssertEqual(closedAudioStreamCount, 0)
+
+        await capture.setSuspendsPreview(false)
         await fixture.viewModel.prepare()
         try await waitUntil { fixture.viewModel.state == .ready }
-
-        XCTAssertFalse(fixture.viewModel.isFocusAndExposureLocked)
-        XCTAssertNil(fixture.viewModel.focusAndExposureNoticeMessage)
+        let configureCount = await capture.configureCount
+        XCTAssertEqual(configureCount, 2)
     }
 
     func testUnsupportedPointAndLockCapabilitiesAreDisabled()
@@ -1429,14 +1806,21 @@ final class CameraRecordingViewModelTests: XCTestCase {
     }
 
     func testFinalMediaDurationOverridesLiveEstimate() async throws {
-        let capture = TestCaptureSession()
+        let capture = TestCaptureSession(
+            automaticallyStartsRecording: false
+        )
         let fixture = makeFixture(capture: capture)
         await fixture.viewModel.prepare()
         try await waitUntil { fixture.viewModel.state == .ready }
         fixture.viewModel.startRecording()
-        let recordingID = try await waitForRecordingID(
+        let recordingID = try await waitForRequestedRecordingID(
             viewModel: fixture.viewModel
         )
+        await capture.emitRecordingStarted(recordingID: recordingID)
+        try await waitUntil {
+            fixture.viewModel.state
+                == .recording(recordingID: recordingID)
+        }
         await capture.emitDuration(
             recordingID: recordingID,
             seconds: 0.75
@@ -1610,7 +1994,7 @@ final class CameraRecordingViewModelTests: XCTestCase {
 
         fixture.viewModel.startRecording()
         _ = try await waitForRecordingID(viewModel: fixture.viewModel)
-        await audio.emit(.interruptionBegan)
+        await audio.emit(.interruptionBegan(.unspecified))
         try await waitUntil {
             if case .interrupted(
                 _,
@@ -1623,15 +2007,992 @@ final class CameraRecordingViewModelTests: XCTestCase {
         try await waitUntil { await capture.stopRecordingCount == 1 }
     }
 
+    func testRapidCallEpisodeFinalizesAndPublishesExactlyOnce()
+        async throws
+    {
+        let audio = TestAudioSession()
+        let capture = TestCaptureSession()
+        let files = TestRecordingFileStore()
+        let fixture = makeFixture(
+            capture: capture,
+            files: files,
+            audio: audio
+        )
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        await audio.emit(.interruptionBegan(.unspecified))
+        await capture.interrupt(
+            recordingID: recordingID,
+            reason: .audioDeviceInUseByAnotherClient
+        )
+        await audio.emit(.interruptionEnded(.unspecified))
+        try await waitUntil { await capture.stopRecordingCount == 1 }
+        XCTAssertTrue(fixture.viewModel.shouldShowManualReprepare)
+        XCTAssertFalse(fixture.viewModel.canRetryPreparation)
+
+        await capture.finish(recordingID: recordingID)
+        try await waitUntil {
+            fixture.viewModel.state
+                == .recoveryRequired(
+                    reason: .audioDeviceInUseByAnotherClient
+                )
+        }
+
+        let preserveCount = await files.preserveCount
+        XCTAssertEqual(preserveCount, 1)
+        XCTAssertEqual(fixture.viewModel.recoverableReviewItems.count, 1)
+        XCTAssertTrue(fixture.viewModel.requiresManualReprepare)
+        XCTAssertTrue(fixture.viewModel.canRetryPreparation)
+    }
+
+    func testInterruptionEndBeforeDidFinishCannotRestoreReady()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let fixture = makeFixture(capture: capture)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        await capture.interrupt(
+            recordingID: recordingID,
+            reason: .videoDeviceInUseByAnotherClient
+        )
+        await capture.endCurrentInterruption()
+        try await Task.sleep(for: .milliseconds(20))
+
+        XCTAssertNotEqual(fixture.viewModel.state, .ready)
+        XCTAssertFalse(fixture.viewModel.canRetryPreparation)
+        XCTAssertTrue(fixture.viewModel.shouldShowManualReprepare)
+
+        await capture.finish(recordingID: recordingID)
+        try await waitUntil { fixture.viewModel.canRetryPreparation }
+        XCTAssertEqual(fixture.viewModel.recoverableReviewItems.count, 1)
+    }
+
+    func testInterruptionBeforeDidStartWaitsForAVFinishWithoutRecovery()
+        async throws
+    {
+        let audio = TestAudioSession()
+        let capture = TestCaptureSession(
+            automaticallyStartsRecording: false
+        )
+        let files = TestRecordingFileStore()
+        let fixture = makeFixture(
+            capture: capture,
+            files: files,
+            audio: audio
+        )
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRequestedRecordingID(
+            viewModel: fixture.viewModel
+        )
+        XCTAssertEqual(
+            fixture.viewModel.state,
+            .awaitingRecordingStart(recordingID: recordingID)
+        )
+
+        await audio.emit(.interruptionBegan(.unspecified))
+        try await waitUntil { await capture.stopRecordingCount == 1 }
+        XCTAssertFalse(fixture.viewModel.canRetryPreparation)
+
+        await capture.finish(recordingID: recordingID)
+        try await waitUntil { fixture.viewModel.canRetryPreparation }
+
+        let preserveCount = await files.preserveCount
+        XCTAssertEqual(preserveCount, 0)
+        XCTAssertTrue(fixture.viewModel.recoverableReviewItems.isEmpty)
+        XCTAssertTrue(fixture.viewModel.requiresManualReprepare)
+    }
+
+    func testRecoverableIsPublishedAfterDelayedManifestCommit()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let files = TestRecordingFileStore()
+        await files.setSuspendsPreservation(true)
+        let fixture = makeFixture(capture: capture, files: files)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        await capture.interrupt(
+            recordingID: recordingID,
+            reason: .cameraUnavailable
+        )
+        await capture.finish(recordingID: recordingID)
+        try await waitUntil { await files.preserveCount == 1 }
+        XCTAssertTrue(fixture.viewModel.recoverableReviewItems.isEmpty)
+        XCTAssertFalse(fixture.viewModel.canRetryPreparation)
+
+        await files.resumeSuspendedPreservations()
+        try await waitUntil {
+            fixture.viewModel.recoverableReviewItems.map(\.id)
+                == [recordingID]
+        }
+        XCTAssertTrue(fixture.viewModel.canRetryPreparation)
+    }
+
+    func testBackgroundReasonWinsLaterSuspendedAudioNotification()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let audio = TestAudioSession()
+        let fixture = makeFixture(capture: capture, audio: audio)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+
+        fixture.viewModel.sceneDidEnterBackground()
+        await audio.emit(
+            .interruptionBegan(
+                AudioInterruptionDetails(
+                    rawType: 1,
+                    rawReason: 1,
+                    wasSuspended: true
+                )
+            )
+        )
+        try await waitUntil {
+            fixture.viewModel.interruptionEpisode?.sources.contains(
+                .audioSession
+            ) == true
+        }
+
+        XCTAssertEqual(
+            fixture.viewModel.interruptionEpisode?.primaryReason,
+            .applicationBackgrounded
+        )
+        XCTAssertTrue(
+            fixture.viewModel.interruptionNoticeMessage?.contains("后台")
+                == true
+        )
+        XCTAssertFalse(
+            fixture.viewModel.interruptionNoticeMessage?.contains("麦克风")
+                == true
+        )
+    }
+
+    func testReviewRetainAndDeleteNeverClearManualReprepareLatch()
+        async throws
+    {
+        let files = TestRecordingFileStore()
+        let retained = makeRecoverable()
+        let deleted = makeRecoverable()
+        await files.setPendingRecoverables([retained, deleted])
+        let fixture = makeFixture(files: files)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        await fixture.capture.interruptCurrentSession(
+            reason: .videoDeviceInUseByAnotherClient
+        )
+        try await waitUntil {
+            fixture.viewModel.requiresManualReprepare
+        }
+
+        _ = await fixture.viewModel.validateRecoverableRecording(
+            recordingID: retained.recordingID
+        )
+        XCTAssertTrue(fixture.viewModel.requiresManualReprepare)
+        _ = await fixture.viewModel.retainRecoverableRecording(
+            recordingID: retained.recordingID
+        )
+        XCTAssertTrue(fixture.viewModel.requiresManualReprepare)
+        _ = await fixture.viewModel.deleteRecoverableRecording(
+            recordingID: deleted.recordingID
+        )
+        XCTAssertTrue(fixture.viewModel.requiresManualReprepare)
+        XCTAssertTrue(fixture.viewModel.shouldShowManualReprepare)
+    }
+
+    func testExplicitReprepareIsOnlyPathBackToReadyAfterSystemUse()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let fixture = makeFixture(capture: capture)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+
+        await capture.interruptCurrentSession(
+            reason: .videoDeviceInUseByAnotherClient
+        )
+        await capture.endCurrentInterruption()
+        try await waitUntil { fixture.viewModel.canRetryPreparation }
+        XCTAssertNotEqual(fixture.viewModel.state, .ready)
+        XCTAssertTrue(fixture.viewModel.requiresManualReprepare)
+
+        await fixture.viewModel.retryPreparation()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        XCTAssertFalse(fixture.viewModel.requiresManualReprepare)
+        XCTAssertFalse(fixture.viewModel.shouldShowManualReprepare)
+    }
+
+    func testOldLifecycleInterruptionEndCannotChangeNewReadySession()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let fixture = makeFixture(capture: capture)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        let initialSessionIDs = await capture.configuredSessionIDs
+        let oldSessionID = try XCTUnwrap(initialSessionIDs.first)
+
+        await capture.interruptCurrentSession(reason: .cameraUnavailable)
+        try await waitUntil {
+            fixture.viewModel.requiresManualReprepare
+        }
+        await fixture.viewModel.retryPreparation()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        let reconfiguredSessionIDs = await capture.configuredSessionIDs
+        let newSessionID = try XCTUnwrap(reconfiguredSessionIDs.last)
+        XCTAssertNotEqual(oldSessionID, newSessionID)
+
+        await capture.emitInterruptionEnded(to: oldSessionID)
+        await capture.emitInterruption(
+            to: oldSessionID,
+            recordingID: nil,
+            reason: .audioDeviceInUseByAnotherClient
+        )
+        try await Task.sleep(for: .milliseconds(20))
+
+        XCTAssertEqual(fixture.viewModel.state, .ready)
+        XCTAssertFalse(fixture.viewModel.requiresManualReprepare)
+        XCTAssertNil(fixture.viewModel.interruptionEpisode)
+    }
+
+    func testMultipleSourcesShareOneEpisodeOneStopAndOneRecovery()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let audio = TestAudioSession()
+        let files = TestRecordingFileStore()
+        let fixture = makeFixture(
+            capture: capture,
+            files: files,
+            audio: audio
+        )
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        fixture.viewModel.sceneDidEnterBackground()
+        let episodeID = try XCTUnwrap(
+            fixture.viewModel.interruptionEpisode?.id
+        )
+        await audio.emit(.interruptionBegan(.unspecified))
+        await capture.interrupt(
+            recordingID: recordingID,
+            reason: .videoDeviceInUseByAnotherClient
+        )
+        try await waitUntil { await capture.stopRecordingCount == 1 }
+
+        XCTAssertEqual(fixture.viewModel.interruptionEpisode?.id, episodeID)
+        XCTAssertEqual(
+            fixture.viewModel.interruptionEpisode?.sources,
+            Set([
+                .applicationBackgrounded,
+                .audioSession,
+                .cameraInUseByAnotherClient
+            ])
+        )
+
+        await capture.finish(recordingID: recordingID)
+        try await waitUntil { fixture.viewModel.canRetryPreparation }
+        let preserveCount = await files.preserveCount
+        XCTAssertEqual(preserveCount, 1)
+        XCTAssertEqual(fixture.viewModel.recoverableReviewItems.count, 1)
+    }
+
+    func testRecoveryCommitFailureNeverPublishesFalseSuccess()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let files = TestRecordingFileStore()
+        await files.setShouldFailPreserve(true)
+        let fixture = makeFixture(capture: capture, files: files)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        await capture.interrupt(
+            recordingID: recordingID,
+            reason: .applicationBackgrounded
+        )
+        await capture.finish(recordingID: recordingID)
+        try await waitUntil { fixture.viewModel.canRetryPreparation }
+
+        let preserveCount = await files.preserveCount
+        XCTAssertEqual(preserveCount, 1)
+        XCTAssertTrue(fixture.viewModel.recoverableReviewItems.isEmpty)
+        XCTAssertFalse(
+            fixture.viewModel.interruptionNoticeMessage?.contains("已保留")
+                == true
+        )
+        XCTAssertTrue(
+            fixture.viewModel.interruptionNoticeMessage?.contains("未能")
+                == true
+        )
+        XCTAssertTrue(fixture.viewModel.requiresManualReprepare)
+        XCTAssertTrue(
+            fixture.viewModel.interruptionEpisode?
+                .didFinishAVFoundationFinalization == true
+        )
+        XCTAssertTrue(
+            fixture.viewModel.interruptionEpisode?
+                .didResolveRecoveryManifest == true
+        )
+        XCTAssertFalse(
+            fixture.viewModel.interruptionEpisode?
+                .didCommitRecoveryManifest == true
+        )
+
+        await fixture.viewModel.retryPreparation()
+        try await waitUntil { fixture.viewModel.state == .ready }
+    }
+
+    func testIdleInterruptionCreatesNoRecoveryAndDoesNotInventCameraUse()
+        async throws
+    {
+        let audio = TestAudioSession()
+        let fixture = makeFixture(audio: audio)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+
+        await audio.emit(.interruptionBegan(.unspecified))
+        try await waitUntil { fixture.viewModel.requiresManualReprepare }
+
+        XCTAssertTrue(fixture.viewModel.recoverableReviewItems.isEmpty)
+        XCTAssertNil(fixture.viewModel.interruptionEpisode?.recordingID)
+        XCTAssertEqual(
+            fixture.viewModel.interruptionEpisode?.sources,
+            Set([.audioSession])
+        )
+        XCTAssertEqual(
+            fixture.viewModel.interruptionEpisode?.primaryReason,
+            .audioSessionInterrupted
+        )
+        XCTAssertFalse(
+            fixture.viewModel.interruptionNoticeMessage?.contains("摄像头被")
+                == true
+        )
+    }
+
+    func testSystemAudioServiceMapsMediaServicesLostNotification()
+        async throws
+    {
+        let service = SystemAudioSessionService()
+        let stream = await service.events()
+        let received = expectation(description: "收到媒体服务丢失事件")
+        var event: AudioSessionEvent?
+        let observer = Task { @MainActor in
+            for await next in stream {
+                event = next
+                received.fulfill()
+                return
+            }
+        }
+
+        NotificationCenter.default.post(
+            name: AVAudioSession.mediaServicesWereLostNotification,
+            object: AVAudioSession.sharedInstance()
+        )
+        await fulfillment(of: [received], timeout: 1)
+        observer.cancel()
+
+        XCTAssertEqual(event, .mediaServicesWereLost)
+    }
+
+    func testSystemAudioServiceMapsMediaServicesResetNotification()
+        async throws
+    {
+        let service = SystemAudioSessionService()
+        let stream = await service.events()
+        let received = expectation(description: "收到媒体服务重置事件")
+        var event: AudioSessionEvent?
+        let observer = Task { @MainActor in
+            for await next in stream {
+                event = next
+                received.fulfill()
+                return
+            }
+        }
+
+        NotificationCenter.default.post(
+            name: AVAudioSession.mediaServicesWereResetNotification,
+            object: AVAudioSession.sharedInstance()
+        )
+        await fulfillment(of: [received], timeout: 1)
+        observer.cancel()
+
+        XCTAssertEqual(event, .mediaServicesWereReset)
+    }
+
+    func testMediaServicesLostThenResetUsesOneEpisodeAndOneStop()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let audio = TestAudioSession()
+        let files = TestRecordingFileStore()
+        let fixture = makeFixture(
+            capture: capture,
+            files: files,
+            audio: audio
+        )
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        await audio.emit(.mediaServicesWereLost)
+        try await waitUntil { await capture.stopRecordingCount == 1 }
+        let episodeID = try XCTUnwrap(
+            fixture.viewModel.interruptionEpisode?.id
+        )
+        await audio.emit(.mediaServicesWereReset)
+        try await waitUntil {
+            fixture.viewModel.interruptionEpisode?.reasons.contains(
+                .mediaServicesReset
+            ) == true
+        }
+
+        let stopCount = await capture.stopRecordingCount
+        XCTAssertEqual(stopCount, 1)
+        XCTAssertEqual(fixture.viewModel.interruptionEpisode?.id, episodeID)
+        XCTAssertEqual(
+            fixture.viewModel.interruptionEpisode?.primaryReason,
+            .mediaServicesLost
+        )
+        XCTAssertTrue(fixture.viewModel.requiresManualReprepare)
+        XCTAssertTrue(
+            fixture.viewModel.interruptionNoticeMessage?.contains(
+                "已经恢复"
+            ) == true
+        )
+
+        await capture.finish(recordingID: recordingID)
+        try await waitUntil { fixture.viewModel.canRetryPreparation }
+        let preserveCount = await files.preserveCount
+        XCTAssertEqual(preserveCount, 1)
+        XCTAssertEqual(fixture.viewModel.recoverableReviewItems.count, 1)
+
+        await fixture.viewModel.retryPreparation()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        let configureCount = await capture.configureCount
+        let activationCount = await audio.activationCount
+        let deactivationCount = await audio.deactivationCount
+        XCTAssertEqual(configureCount, 2)
+        XCTAssertEqual(activationCount, 2)
+        XCTAssertEqual(deactivationCount, 1)
+        XCTAssertFalse(fixture.viewModel.requiresManualReprepare)
+    }
+
+    func testBackgroundDelayedDidFinishCompletesWithinFiniteTask()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let files = TestRecordingFileStore()
+        let backgroundTasks = TestRecordingBackgroundTaskManager()
+        let fixture = makeFixture(
+            capture: capture,
+            files: files,
+            backgroundTasks: backgroundTasks
+        )
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        fixture.viewModel.sceneDidEnterBackground()
+        try await waitUntil {
+            let stopCount = await capture.stopRecordingCount
+            return backgroundTasks.activeCount == 1 && stopCount == 1
+        }
+        XCTAssertTrue(fixture.viewModel.recoverableReviewItems.isEmpty)
+
+        await capture.finish(recordingID: recordingID)
+        try await waitUntil {
+            fixture.viewModel.recoverableReviewItems.map(\.id)
+                == [recordingID]
+                && backgroundTasks.activeCount == 0
+        }
+
+        XCTAssertEqual(backgroundTasks.beginCount, 1)
+        XCTAssertEqual(backgroundTasks.endCount, 1)
+        XCTAssertEqual(backgroundTasks.activeCount, 0)
+        XCTAssertTrue(fixture.viewModel.shouldShowManualReprepare)
+    }
+
+    func testDidFinishBeforeBackgroundLinksAndPublishesRecoveryOnce()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let files = TestRecordingFileStore()
+        let backgroundTasks = TestRecordingBackgroundTaskManager()
+        let fixture = makeFixture(
+            capture: capture,
+            files: files,
+            backgroundTasks: backgroundTasks
+        )
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        await capture.finish(recordingID: recordingID)
+        try await waitUntil {
+            fixture.viewModel
+                .finalizedRecordingsAwaitingDispositionForTesting
+                .contains(recordingID)
+        }
+        let preInterruptionCompleteCount = await files.completeCount
+        let preInterruptionPreserveCount = await files.preserveCount
+        XCTAssertEqual(preInterruptionCompleteCount, 0)
+        XCTAssertEqual(preInterruptionPreserveCount, 0)
+
+        fixture.viewModel.sceneDidEnterBackground()
+        try await waitUntil {
+            fixture.viewModel.recoverableReviewItems.map(\.id)
+                == [recordingID]
+        }
+
+        let completeCount = await files.completeCount
+        let preserveCount = await files.preserveCount
+        XCTAssertEqual(completeCount, 0)
+        XCTAssertEqual(preserveCount, 1)
+        XCTAssertEqual(backgroundTasks.beginCount, 1)
+        XCTAssertEqual(backgroundTasks.endCount, 1)
+        XCTAssertEqual(
+            fixture.viewModel.interruptionEpisode?.recordingID,
+            recordingID
+        )
+        XCTAssertTrue(fixture.viewModel.shouldShowManualReprepare)
+    }
+
+    func testDidFinishThenForegroundThenBackgroundStillReconciles()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let files = TestRecordingFileStore()
+        let fixture = makeFixture(capture: capture, files: files)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        await capture.finish(recordingID: recordingID)
+        try await waitUntil {
+            fixture.viewModel
+                .finalizedRecordingsAwaitingDispositionForTesting
+                .contains(recordingID)
+        }
+        fixture.viewModel.sceneDidBecomeActive()
+        XCTAssertTrue(fixture.viewModel.recoverableReviewItems.isEmpty)
+
+        fixture.viewModel.sceneDidEnterBackground()
+        try await waitUntil {
+            fixture.viewModel.recoverableReviewItems.map(\.id)
+                == [recordingID]
+        }
+
+        let preserveCount = await files.preserveCount
+        let completeCount = await files.completeCount
+        XCTAssertEqual(preserveCount, 1)
+        XCTAssertEqual(completeCount, 0)
+    }
+
+    func testDuplicateDidFinishCannotCommitOrPublishTwice()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let files = TestRecordingFileStore()
+        await files.setSuspendsPreservation(true)
+        let fixture = makeFixture(capture: capture, files: files)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        fixture.viewModel.sceneDidEnterBackground()
+        await capture.finish(recordingID: recordingID)
+        try await waitUntil { await files.preserveCount == 1 }
+        await capture.reemitLastFinished()
+        await files.resumeSuspendedPreservations()
+
+        try await waitUntil {
+            fixture.viewModel.recoverableReviewItems.map(\.id)
+                == [recordingID]
+        }
+        try await waitUntil {
+            fixture.viewModel.ignoredFinalizationCallbackCountForTesting == 1
+        }
+        let preserveCount = await files.preserveCount
+        XCTAssertEqual(preserveCount, 1)
+        XCTAssertEqual(fixture.viewModel.recoverableReviewItems.count, 1)
+    }
+
+    func testNormalStopBeforeBackgroundRemainsNormalCompletion()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let files = TestRecordingFileStore()
+        let fixture = makeFixture(capture: capture, files: files)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        fixture.viewModel.stopRecording()
+        try await waitUntil { await capture.stopRecordingCount == 1 }
+        fixture.viewModel.sceneDidEnterBackground()
+        await capture.finish(recordingID: recordingID)
+        try await waitUntil { await files.completeCount == 1 }
+
+        let preserveCount = await files.preserveCount
+        XCTAssertEqual(preserveCount, 0)
+        XCTAssertEqual(
+            fixture.viewModel.completedRecording?.recordingID,
+            recordingID
+        )
+        XCTAssertTrue(fixture.viewModel.recoverableReviewItems.isEmpty)
+        XCTAssertTrue(fixture.viewModel.shouldShowManualReprepare)
+    }
+
+    func testDidFinishBeforeExplicitStopStillCompletesNormally()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let files = TestRecordingFileStore()
+        let fixture = makeFixture(capture: capture, files: files)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        await capture.finish(recordingID: recordingID)
+        try await waitUntil {
+            fixture.viewModel
+                .finalizedRecordingsAwaitingDispositionForTesting
+                .contains(recordingID)
+        }
+
+        fixture.viewModel.stopRecording()
+        try await waitUntil { await files.completeCount == 1 }
+
+        let captureStopCount = await capture.stopRecordingCount
+        let preserveCount = await files.preserveCount
+        XCTAssertEqual(captureStopCount, 0)
+        XCTAssertEqual(preserveCount, 0)
+        XCTAssertEqual(
+            fixture.viewModel.completedRecording?.recordingID,
+            recordingID
+        )
+        XCTAssertTrue(fixture.viewModel.recoverableReviewItems.isEmpty)
+    }
+
+    func testBackgroundExpiryBeforeDidFinishDoesNotPublishFalseCard()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let files = TestRecordingFileStore()
+        let backgroundTasks = TestRecordingBackgroundTaskManager()
+        let fixture = makeFixture(
+            capture: capture,
+            files: files,
+            backgroundTasks: backgroundTasks
+        )
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        fixture.viewModel.sceneDidEnterBackground()
+        try await waitUntil { backgroundTasks.activeCount == 1 }
+        backgroundTasks.expireActiveTask()
+        await capture.finish(recordingID: recordingID)
+        try await waitUntil { fixture.viewModel.canRetryPreparation }
+
+        let preserveCount = await files.preserveCount
+        XCTAssertEqual(preserveCount, 0)
+        XCTAssertTrue(fixture.viewModel.recoverableReviewItems.isEmpty)
+        XCTAssertTrue(fixture.viewModel.shouldShowManualReprepare)
+    }
+
+    func testBackgroundDidFinishAfterForegroundStillPublishesOnce()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let files = TestRecordingFileStore()
+        let backgroundTasks = TestRecordingBackgroundTaskManager()
+        let fixture = makeFixture(
+            capture: capture,
+            files: files,
+            backgroundTasks: backgroundTasks
+        )
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        fixture.viewModel.sceneDidEnterBackground()
+        try await waitUntil { backgroundTasks.activeCount == 1 }
+        fixture.viewModel.sceneDidBecomeActive()
+        try await waitUntil {
+            let foregroundCount = await capture.foregroundCount
+            let recoverCount = await files.recoverCount
+            return foregroundCount == 1 && recoverCount >= 2
+        }
+        XCTAssertTrue(fixture.viewModel.recoverableReviewItems.isEmpty)
+
+        await capture.finish(recordingID: recordingID)
+        try await waitUntil {
+            fixture.viewModel.recoverableReviewItems.map(\.id)
+                == [recordingID]
+                && backgroundTasks.activeCount == 0
+        }
+
+        XCTAssertEqual(fixture.viewModel.recoverableReviewItems.count, 1)
+        XCTAssertEqual(backgroundTasks.activeCount, 0)
+        XCTAssertTrue(fixture.viewModel.shouldShowManualReprepare)
+    }
+
+    func testBackgroundTaskExpiryBeforeManifestNeverPublishesFalseSuccess()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let files = TestRecordingFileStore()
+        await files.setSuspendsPreservation(true)
+        let backgroundTasks = TestRecordingBackgroundTaskManager()
+        let fixture = makeFixture(
+            capture: capture,
+            files: files,
+            backgroundTasks: backgroundTasks
+        )
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        fixture.viewModel.sceneDidEnterBackground()
+        await capture.finish(recordingID: recordingID)
+        try await waitUntil { await files.preserveCount == 1 }
+        backgroundTasks.expireActiveTask()
+
+        XCTAssertTrue(fixture.viewModel.recoverableReviewItems.isEmpty)
+        XCTAssertTrue(fixture.viewModel.shouldShowManualReprepare)
+        XCTAssertTrue(
+            fixture.viewModel.interruptionNoticeMessage?.contains(
+                "尚不能确认恢复片段"
+            ) == true
+        )
+
+        await files.resumeSuspendedPreservations()
+        try await waitUntil {
+            fixture.viewModel.recoverableReviewItems.map(\.id)
+                == [recordingID]
+        }
+        XCTAssertEqual(fixture.viewModel.recoverableReviewItems.count, 1)
+    }
+
+    func testForegroundRescanDoesNotDuplicateCommittedRecoveryCard()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let files = TestRecordingFileStore()
+        let fixture = makeFixture(capture: capture, files: files)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        fixture.viewModel.sceneDidEnterBackground()
+        await capture.finish(recordingID: recordingID)
+        try await waitUntil {
+            fixture.viewModel.recoverableReviewItems.count == 1
+        }
+        fixture.viewModel.sceneDidBecomeActive()
+        try await waitUntil { await files.recoverCount >= 3 }
+
+        XCTAssertEqual(
+            fixture.viewModel.recoverableReviewItems.map(\.id),
+            [recordingID]
+        )
+        XCTAssertTrue(fixture.viewModel.shouldShowManualReprepare)
+    }
+
+    func testBackgroundManifestFailureKeepsRetryWithoutSuccessCard()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let files = TestRecordingFileStore()
+        await files.setShouldFailPreserve(true)
+        let fixture = makeFixture(capture: capture, files: files)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        fixture.viewModel.sceneDidEnterBackground()
+        await capture.finish(recordingID: recordingID)
+        try await waitUntil {
+            fixture.viewModel.canRetryPreparation
+                && fixture.viewModel.shouldShowManualReprepare
+                && fixture.viewModel.interruptionNoticeMessage?.contains(
+                    "无法确认"
+                ) == true
+        }
+
+        XCTAssertTrue(fixture.viewModel.recoverableReviewItems.isEmpty)
+        XCTAssertTrue(fixture.viewModel.shouldShowManualReprepare)
+        XCTAssertFalse(
+            fixture.viewModel.noticeMessage?.contains("发现中断录制片段")
+                == true
+        )
+    }
+
+    func testInvalidFinalizedFileNeverPublishesRecoveryCard()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let files = TestRecordingFileStore()
+        await files.setRejectsInvalidTemporaryFile(true)
+        let fixture = makeFixture(capture: capture, files: files)
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        fixture.viewModel.sceneDidEnterBackground()
+        await capture.finish(recordingID: recordingID)
+        try await waitUntil {
+            fixture.viewModel.canRetryPreparation
+                && fixture.viewModel.shouldShowManualReprepare
+                && fixture.viewModel.interruptionNoticeMessage?.contains(
+                    "无法确认"
+                ) == true
+        }
+
+        XCTAssertTrue(fixture.viewModel.recoverableReviewItems.isEmpty)
+        XCTAssertTrue(fixture.viewModel.shouldShowManualReprepare)
+        XCTAssertTrue(
+            fixture.viewModel.interruptionNoticeMessage?.contains(
+                "无法确认"
+            ) == true
+        )
+    }
+
+    func testOldBackgroundExpirationCannotPolluteNewLifecycle()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let backgroundTasks = TestRecordingBackgroundTaskManager()
+        let fixture = makeFixture(
+            capture: capture,
+            backgroundTasks: backgroundTasks
+        )
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        let recordingID = try await waitForRecordingID(
+            viewModel: fixture.viewModel
+        )
+
+        fixture.viewModel.sceneDidEnterBackground()
+        await capture.finish(recordingID: recordingID)
+        try await waitUntil { fixture.viewModel.canRetryPreparation }
+        await fixture.viewModel.retryPreparation()
+        try await waitUntil { fixture.viewModel.state == .ready }
+
+        backgroundTasks.invokeLastEndedExpirationForTesting()
+
+        XCTAssertEqual(fixture.viewModel.state, .ready)
+        XCTAssertFalse(fixture.viewModel.requiresManualReprepare)
+        XCTAssertNil(fixture.viewModel.interruptionEpisode)
+    }
+
+    func testForegroundScanWithoutCommittedCardKeepsManualReprepare()
+        async throws
+    {
+        let capture = TestCaptureSession()
+        let files = TestRecordingFileStore()
+        let backgroundTasks = TestRecordingBackgroundTaskManager()
+        let fixture = makeFixture(
+            capture: capture,
+            files: files,
+            backgroundTasks: backgroundTasks
+        )
+        await fixture.viewModel.prepare()
+        try await waitUntil { fixture.viewModel.state == .ready }
+        fixture.viewModel.startRecording()
+        _ = try await waitForRecordingID(viewModel: fixture.viewModel)
+
+        fixture.viewModel.sceneDidEnterBackground()
+        try await waitUntil { backgroundTasks.activeCount == 1 }
+        backgroundTasks.expireActiveTask()
+        fixture.viewModel.sceneDidBecomeActive()
+        try await waitUntil { await files.recoverCount >= 2 }
+
+        XCTAssertTrue(fixture.viewModel.recoverableReviewItems.isEmpty)
+        XCTAssertTrue(fixture.viewModel.shouldShowManualReprepare)
+        XCTAssertTrue(fixture.viewModel.canRetryPreparation)
+    }
+
     private func makeFixture(
         permissions: TestCapturePermissions = TestCapturePermissions(),
         capture: TestCaptureSession = TestCaptureSession(),
         files: TestRecordingFileStore = TestRecordingFileStore(),
+        recoverableMediaValidator: TestRecoverableMediaValidator =
+            TestRecoverableMediaValidator(),
         storage: TestStorageSpace = TestStorageSpace(
             capacities: [Int64.max]
         ),
         photos: TestPhotoLibrary = TestPhotoLibrary(result: .saved),
         audio: TestAudioSession = TestAudioSession(),
+        backgroundTasks: TestRecordingBackgroundTaskManager =
+            TestRecordingBackgroundTaskManager(),
         preparationTimeout: Duration = .seconds(1),
         recordingStartTimeout: Duration = .seconds(1)
     ) -> (
@@ -1643,9 +3004,11 @@ final class CameraRecordingViewModelTests: XCTestCase {
             permissions: permissions,
             capture: capture,
             files: files,
+            recoverableMediaValidator: recoverableMediaValidator,
             storage: storage,
             photos: photos,
             audio: audio,
+            backgroundTasks: backgroundTasks,
             storagePolicy: RecordingStoragePolicy(
                 minimumStartBytes: 500 * 1_024 * 1_024,
                 safeStopBytes: 250 * 1_024 * 1_024,
@@ -1680,6 +3043,18 @@ final class CameraRecordingViewModelTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(5))
         }
         XCTFail("Timed out waiting for condition")
+    }
+
+    private func recordLifecycleTestStage(
+        _ stage: String,
+        viewModel: CameraRecordingViewModel
+    ) {
+        #if DEBUG
+        print(
+            "TAKEFLOW_LIFECYCLE_TEST_STAGE name=\(stage) "
+                + "state=\(viewModel.state)"
+        )
+        #endif
     }
 
     private func waitForRecordingID(
@@ -1728,6 +3103,52 @@ final class CameraRecordingViewModelTests: XCTestCase {
 }
 
 @MainActor
+private final class TestRecordingBackgroundTaskManager:
+    RecordingBackgroundTaskManaging
+{
+    private var expirationHandlers:
+        [RecordingBackgroundTaskToken: @MainActor @Sendable () -> Void] = [:]
+    private(set) var beginCount = 0
+    private(set) var endCount = 0
+    private var lastEndedExpirationHandler:
+        (@MainActor @Sendable () -> Void)?
+
+    func beginRecordingFinalization(
+        expirationHandler: @escaping @MainActor @Sendable () -> Void
+    ) -> RecordingBackgroundTaskToken? {
+        beginCount += 1
+        let token = RecordingBackgroundTaskToken()
+        expirationHandlers[token] = expirationHandler
+        return token
+    }
+
+    func endRecordingFinalization(_ token: RecordingBackgroundTaskToken) {
+        guard let handler = expirationHandlers.removeValue(forKey: token) else {
+            return
+        }
+        lastEndedExpirationHandler = handler
+        endCount += 1
+    }
+
+    func expireActiveTask() {
+        guard let (token, handler) = expirationHandlers.first else {
+            return
+        }
+        expirationHandlers.removeValue(forKey: token)
+        endCount += 1
+        handler()
+    }
+
+    var activeCount: Int {
+        expirationHandlers.count
+    }
+
+    func invokeLastEndedExpirationForTesting() {
+        lastEndedExpirationHandler?()
+    }
+}
+
+@MainActor
 private final class TestCapturePermissions: PermissionAuthorizing {
     private var states: [PermissionKind: PermissionState]
     private let requestResults: [PermissionKind: PermissionState]
@@ -1771,15 +3192,24 @@ private actor TestCaptureSession: CaptureSessionServicing {
     private var activeSessionID: UUID?
     private var configuration: CaptureConfiguration?
     private var active: (id: UUID, url: URL, sessionID: UUID)?
+    private var lastFinished:
+        (id: UUID, url: URL, sessionID: UUID, duration: TimeInterval)?
+    private var sessionsPendingStopAfterRecording: Set<UUID> = []
     private var suspendsPreview = false
     private var suspendedPreviewContinuations:
         [UUID: CheckedContinuation<Void, Never>] = [:]
     private var suspendsCameraSwitch = false
     private var suspendedCameraSwitchContinuations:
-        [CheckedContinuation<Void, Never>] = []
+        [(
+            sessionID: UUID,
+            continuation: CheckedContinuation<Void, Never>
+        )] = []
     private var suspendsFocusLock = false
     private var suspendedFocusLockContinuations:
-        [CheckedContinuation<Void, Never>] = []
+        [(
+            sessionID: UUID,
+            continuation: CheckedContinuation<Void, Never>
+        )] = []
     private(set) var configuredSessionIDs: [UUID] = []
     private(set) var configureCount = 0
     private(set) var startPreviewCount = 0
@@ -1849,10 +3279,6 @@ private actor TestCaptureSession: CaptureSessionServicing {
     ) async throws {
         configureCount += 1
         configuredSessionIDs.append(sessionID)
-        // Keep historical continuations alive in this test double so tests can
-        // inject the late callback that a real delegate/notification may have
-        // already queued. The cancelled ViewModel observation task must reject
-        // it by lifecycle generation.
         activeSessionID = sessionID
         let selected = availableFormats.first {
             $0.resolution == preferredResolution
@@ -1890,19 +3316,29 @@ private actor TestCaptureSession: CaptureSessionServicing {
     func stopPreview(sessionID: UUID) async {
         stopPreviewCount += 1
         guard activeSessionID == sessionID else {
+            finishEvents(for: sessionID)
             return
         }
-        if active == nil {
-            activeSessionID = nil
-            configuration = nil
+        guard active == nil else {
+            sessionsPendingStopAfterRecording.insert(sessionID)
+            return
         }
+        completeSessionStop(sessionID: sessionID)
     }
 
     func setSuspendsPreview(_ suspends: Bool) {
         suspendsPreview = suspends
+        if !suspends {
+            resumeSuspendedPreviews()
+        }
+    }
+
+    func suspendedPreviewCount() -> Int {
+        suspendedPreviewContinuations.count
     }
 
     func resumeSuspendedPreviews() {
+        suspendsPreview = false
         let continuations = Array(suspendedPreviewContinuations.values)
         suspendedPreviewContinuations.removeAll()
         continuations.forEach { $0.resume() }
@@ -1916,7 +3352,7 @@ private actor TestCaptureSession: CaptureSessionServicing {
         suspendsCameraSwitch = false
         let continuations = suspendedCameraSwitchContinuations
         suspendedCameraSwitchContinuations.removeAll()
-        continuations.forEach { $0.resume() }
+        continuations.forEach { $0.continuation.resume() }
     }
 
     func setSuspendsFocusLock(_ suspends: Bool) {
@@ -1927,7 +3363,7 @@ private actor TestCaptureSession: CaptureSessionServicing {
         suspendsFocusLock = false
         let continuations = suspendedFocusLockContinuations
         suspendedFocusLockContinuations.removeAll()
-        continuations.forEach { $0.resume() }
+        continuations.forEach { $0.continuation.resume() }
     }
 
     func emitReadyForTesting(
@@ -1962,7 +3398,9 @@ private actor TestCaptureSession: CaptureSessionServicing {
         }
         if suspendsCameraSwitch {
             await withCheckedContinuation { continuation in
-                suspendedCameraSwitchContinuations.append(continuation)
+                suspendedCameraSwitchContinuations.append(
+                    (sessionID, continuation)
+                )
             }
         }
         guard
@@ -2026,6 +3464,11 @@ private actor TestCaptureSession: CaptureSessionServicing {
                     duration: 2
                 )
             )
+            if sessionsPendingStopAfterRecording.contains(
+                recording.sessionID
+            ) {
+                completeSessionStop(sessionID: recording.sessionID)
+            }
         }
     }
 
@@ -2080,7 +3523,9 @@ private actor TestCaptureSession: CaptureSessionServicing {
         lockRequests.append(locked)
         if suspendsFocusLock {
             await withCheckedContinuation { continuation in
-                suspendedFocusLockContinuations.append(continuation)
+                suspendedFocusLockContinuations.append(
+                    (sessionID, continuation)
+                )
             }
         }
         return CaptureFocusExposureLockState(
@@ -2146,23 +3591,42 @@ private actor TestCaptureSession: CaptureSessionServicing {
         recordingID: UUID,
         duration: TimeInterval = 2
     ) {
+        let recording = active
         let url: URL
-        if active?.id == recordingID {
-            url = active?.url ?? URL(fileURLWithPath: "/tmp/capture.mov")
+        if recording?.id == recordingID {
+            url = recording?.url
+                ?? URL(fileURLWithPath: "/tmp/capture.mov")
             active = nil
         } else {
             url = URL(fileURLWithPath: "/tmp/stale.mov")
         }
-        let sessionID = active?.sessionID ?? activeSessionID
+        let sessionID = recording?.sessionID ?? activeSessionID
         if let sessionID {
+            lastFinished = (recordingID, url, sessionID, duration)
             continuations[sessionID]?.yield(
-            .recordingFinished(
-                recordingID: recordingID,
-                outputURL: url,
-                duration: duration
+                .recordingFinished(
+                    recordingID: recordingID,
+                    outputURL: url,
+                    duration: duration
+                )
             )
-            )
+            if sessionsPendingStopAfterRecording.contains(sessionID) {
+                completeSessionStop(sessionID: sessionID)
+            }
         }
+    }
+
+    func reemitLastFinished() {
+        guard let lastFinished else {
+            return
+        }
+        continuations[lastFinished.sessionID]?.yield(
+            .recordingFinished(
+                recordingID: lastFinished.id,
+                outputURL: lastFinished.url,
+                duration: lastFinished.duration
+            )
+        )
     }
 
     func interrupt(
@@ -2203,6 +3667,12 @@ private actor TestCaptureSession: CaptureSessionServicing {
         )
     }
 
+    func emitInterruptionEnded(to sessionID: UUID) {
+        continuations[sessionID]?.yield(
+            .interruptionEnded(reason: .unknown)
+        )
+    }
+
     func emitInterruption(
         to sessionID: UUID,
         recordingID: UUID?,
@@ -2216,6 +3686,41 @@ private actor TestCaptureSession: CaptureSessionServicing {
             )
         )
     }
+
+    func activeEventStreamCount() -> Int {
+        continuations.count
+    }
+
+    private func completeSessionStop(sessionID: UUID) {
+        sessionsPendingStopAfterRecording.remove(sessionID)
+        if activeSessionID == sessionID {
+            activeSessionID = nil
+            configuration = nil
+        }
+        suspendedPreviewContinuations.removeValue(
+            forKey: sessionID
+        )?.resume()
+        let cameraSwitches = suspendedCameraSwitchContinuations.filter {
+            $0.sessionID == sessionID
+        }
+        suspendedCameraSwitchContinuations.removeAll {
+            $0.sessionID == sessionID
+        }
+        cameraSwitches.forEach { $0.continuation.resume() }
+        let focusLocks = suspendedFocusLockContinuations.filter {
+            $0.sessionID == sessionID
+        }
+        suspendedFocusLockContinuations.removeAll {
+            $0.sessionID == sessionID
+        }
+        focusLocks.forEach { $0.continuation.resume() }
+        finishEvents(for: sessionID)
+    }
+
+    private func finishEvents(for sessionID: UUID) {
+        continuations.removeValue(forKey: sessionID)?.finish()
+    }
+
 }
 
 private actor TestRecordingFileStore: RecordingFileStoring {
@@ -2223,14 +3728,29 @@ private actor TestRecordingFileStore: RecordingFileStoring {
     private(set) var completeCount = 0
     private(set) var markStartedCount = 0
     private(set) var preserveCount = 0
+    private(set) var recoverCount = 0
     private(set) var completedRecordings: [CompletedRecording] = []
     private(set) var deletedProjectIDs: [UUID] = []
+    private(set) var retainedRecoverableIDs: [UUID] = []
+    private(set) var deletedRecoverableIDs: [UUID] = []
+    private var pendingRecoverables: [RecoverableRecording] = []
+    private var shouldFailRetain = false
+    private var shouldFailDelete = false
+    private var shouldFailPreserve = false
+    private var rejectsInvalidTemporaryFile = false
     private var suspendsCompletion = false
     private var completionContinuations:
+        [CheckedContinuation<Void, Never>] = []
+    private var suspendsPreservation = false
+    private var preservationContinuations:
         [CheckedContinuation<Void, Never>] = []
 
     func setSuspendsCompletion(_ suspends: Bool) {
         suspendsCompletion = suspends
+    }
+
+    func retainedIDs() -> [UUID] {
+        retainedRecoverableIDs
     }
 
     func resumeSuspendedCompletions() {
@@ -2238,6 +3758,25 @@ private actor TestRecordingFileStore: RecordingFileStoring {
         let continuations = completionContinuations
         completionContinuations.removeAll()
         continuations.forEach { $0.resume() }
+    }
+
+    func setSuspendsPreservation(_ suspends: Bool) {
+        suspendsPreservation = suspends
+    }
+
+    func resumeSuspendedPreservations() {
+        suspendsPreservation = false
+        let continuations = preservationContinuations
+        preservationContinuations.removeAll()
+        continuations.forEach { $0.resume() }
+    }
+
+    func setShouldFailPreserve(_ shouldFail: Bool) {
+        shouldFailPreserve = shouldFail
+    }
+
+    func setRejectsInvalidTemporaryFile(_ rejects: Bool) {
+        rejectsInvalidTemporaryFile = rejects
     }
 
     func createRecording(
@@ -2292,21 +3831,146 @@ private actor TestRecordingFileStore: RecordingFileStoring {
         reason: CaptureInterruptionReason
     ) async throws -> RecoverableRecording {
         preserveCount += 1
-        return RecoverableRecording(
+        if suspendsPreservation {
+            await withCheckedContinuation { continuation in
+                preservationContinuations.append(continuation)
+            }
+        }
+        if shouldFailPreserve || rejectsInvalidTemporaryFile {
+            throw CaptureError.fileFinalizationFailed
+        }
+        let recovered = RecoverableRecording(
             projectID: recording.projectID,
             recordingID: recording.recordingID,
             fileURL: recording.temporaryURL,
             reason: reason,
             discoveredAt: .now
         )
+        pendingRecoverables.append(recovered)
+        return recovered
     }
 
     func recoverPendingRecordings() async -> [RecoverableRecording] {
-        []
+        recoverCount += 1
+        return pendingRecoverables
+    }
+
+    func recoverCommittedRecordings() async -> [RecoverableRecording] {
+        recoverCount += 1
+        return pendingRecoverables
+    }
+
+    func setPendingRecoverables(_ recordings: [RecoverableRecording]) {
+        pendingRecoverables = recordings
+    }
+
+    func setShouldFailRetain(_ shouldFail: Bool) {
+        shouldFailRetain = shouldFail
+    }
+
+    func setShouldFailDelete(_ shouldFail: Bool) {
+        shouldFailDelete = shouldFail
+    }
+
+    func retainRecoverableRecording(
+        _ recording: RecoverableRecording,
+        duration: TimeInterval
+    ) async throws -> CompletedRecording {
+        if shouldFailRetain {
+            throw CaptureError.fileFinalizationFailed
+        }
+        retainedRecoverableIDs.append(recording.recordingID)
+        pendingRecoverables.removeAll {
+            $0.recordingID == recording.recordingID
+        }
+        return CompletedRecording(
+            projectID: recording.projectID,
+            recordingID: recording.recordingID,
+            fileURL: URL(fileURLWithPath: "/tmp/retained-\(recording.recordingID).mov"),
+            duration: duration,
+            completedAt: .now,
+            origin: .interruptedRecovery
+        )
+    }
+
+    func markRecoverableRecordingDamaged(
+        _ recording: RecoverableRecording
+    ) async throws -> RecoverableRecording {
+        var damaged = recording
+        damaged.disposition = .damaged
+        if let index = pendingRecoverables.firstIndex(where: {
+            $0.recordingID == recording.recordingID
+        }) {
+            pendingRecoverables[index] = damaged
+        }
+        return damaged
+    }
+
+    func deleteRecoverableRecording(
+        projectID: UUID,
+        recordingID: UUID
+    ) async throws {
+        if shouldFailDelete {
+            throw CaptureError.fileFinalizationFailed
+        }
+        guard pendingRecoverables.contains(where: {
+            $0.projectID == projectID && $0.recordingID == recordingID
+        }) else {
+            throw CaptureError.fileFinalizationFailed
+        }
+        deletedRecoverableIDs.append(recordingID)
+        pendingRecoverables.removeAll {
+            $0.projectID == projectID && $0.recordingID == recordingID
+        }
     }
 
     func deleteProject(projectID: UUID) async throws {
         deletedProjectIDs.append(projectID)
+    }
+}
+
+private actor TestRecoverableMediaValidator: RecoverableMediaValidating {
+    private var results: [UUID: RecoverableMediaValidationResult] = [:]
+    private(set) var validationCounts: [UUID: Int] = [:]
+    private var suspendedIDs: Set<UUID> = []
+    private var continuations:
+        [UUID: [CheckedContinuation<Void, Never>]] = [:]
+
+    func setResult(
+        _ result: RecoverableMediaValidationResult,
+        for recordingID: UUID
+    ) {
+        results[recordingID] = result
+    }
+
+    func validationCount(for recordingID: UUID) -> Int {
+        validationCounts[recordingID, default: 0]
+    }
+
+    func setSuspended(_ suspended: Bool, for recordingID: UUID) {
+        if suspended {
+            suspendedIDs.insert(recordingID)
+        } else {
+            suspendedIDs.remove(recordingID)
+            let waiting = continuations.removeValue(forKey: recordingID) ?? []
+            waiting.forEach { $0.resume() }
+        }
+    }
+
+    func validate(
+        _ recording: RecoverableRecording
+    ) async -> RecoverableMediaValidationResult {
+        validationCounts[recording.recordingID, default: 0] += 1
+        if suspendedIDs.contains(recording.recordingID) {
+            await withCheckedContinuation { continuation in
+                continuations[recording.recordingID, default: []]
+                    .append(continuation)
+            }
+        }
+        return results[recording.recordingID]
+            ?? .playable(
+                RecoverableMediaInfo(duration: 2, hasAudioTrack: true)
+            )
     }
 }
 
@@ -2341,6 +4005,8 @@ private actor TestAudioSession: AudioSessionServicing {
     private var continuations:
         [UUID: AsyncStream<AudioSessionEvent>.Continuation] = [:]
     private(set) var subscriptionIDs: [UUID] = []
+    private(set) var activationCount = 0
+    private(set) var deactivationCount = 0
 
     init() {}
 
@@ -2352,9 +4018,16 @@ private actor TestAudioSession: AudioSessionServicing {
         )
     }
 
-    func activateForRecording() async throws {}
+    func activateForRecording() async throws {
+        activationCount += 1
+    }
 
-    func deactivateAfterRecording() async {}
+    func deactivateAfterRecording() async {
+        deactivationCount += 1
+        let activeContinuations = Array(continuations.values)
+        continuations.removeAll()
+        activeContinuations.forEach { $0.finish() }
+    }
 
     func events() async -> AsyncStream<AudioSessionEvent> {
         let pair = AsyncStream<AudioSessionEvent>.makeStream(
@@ -2380,4 +4053,9 @@ private actor TestAudioSession: AudioSessionServicing {
     func subscriptionCount() -> Int {
         subscriptionIDs.count
     }
+
+    func activeEventStreamCount() -> Int {
+        continuations.count
+    }
+
 }

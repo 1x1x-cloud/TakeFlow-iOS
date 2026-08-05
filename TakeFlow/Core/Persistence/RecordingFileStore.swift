@@ -6,10 +6,13 @@ actor RecordingFileStore: RecordingFileStoring {
         case recording
         case completed
         case recoverable
+        case retaining
+        case retainedInterrupted
+        case damaged
     }
 
     private struct Manifest: Codable {
-        let schemaVersion: Int
+        var schemaVersion: Int
         let projectID: UUID
         let recordingID: UUID
         let scriptID: UUID
@@ -74,7 +77,7 @@ actor RecordingFileStore: RecordingFileStoring {
         )
         let createdAt = now()
         let manifest = Manifest(
-            schemaVersion: 1,
+            schemaVersion: 2,
             projectID: projectID,
             recordingID: recordingID,
             scriptID: scriptID,
@@ -189,7 +192,10 @@ actor RecordingFileStore: RecordingFileStoring {
             throw CaptureError.fileFinalizationFailed
         }
         let retainedURL = retainedFileURL(for: recording)
-        guard retainedURL != nil else {
+        guard
+            let retainedURL,
+            isNonEmptyRegularFile(at: retainedURL)
+        else {
             throw CaptureError.fileFinalizationFailed
         }
         try markManifestRecoverable(
@@ -200,13 +206,23 @@ actor RecordingFileStore: RecordingFileStoring {
         return RecoverableRecording(
             projectID: recording.projectID,
             recordingID: recording.recordingID,
-            fileURL: retainedURL ?? recording.temporaryURL,
+            fileURL: retainedURL,
             reason: reason,
             discoveredAt: manifest.updatedAt
         )
     }
 
     func recoverPendingRecordings() async -> [RecoverableRecording] {
+        scanRecoverableRecordings(promotingOrphans: true)
+    }
+
+    func recoverCommittedRecordings() async -> [RecoverableRecording] {
+        scanRecoverableRecordings(promotingOrphans: false)
+    }
+
+    private func scanRecoverableRecordings(
+        promotingOrphans: Bool
+    ) -> [RecoverableRecording] {
         guard
             let projectURLs = try? fileManager.contentsOfDirectory(
                 at: rootURL,
@@ -221,8 +237,9 @@ actor RecordingFileStore: RecordingFileStoring {
         for projectURL in projectURLs {
             guard
                 let projectID = UUID(uuidString: projectURL.lastPathComponent),
-                let manifest = try? readManifest(projectID: projectID),
-                manifest.state != .completed
+                var manifest = try? readManifest(projectID: projectID),
+                manifest.state != .completed,
+                manifest.state != .retainedInterrupted
             else {
                 continue
             }
@@ -238,17 +255,134 @@ actor RecordingFileStore: RecordingFileStoring {
             guard let retainedURL else {
                 continue
             }
+            if manifest.state == .prepared || manifest.state == .recording {
+                guard
+                    promotingOrphans,
+                    isNonEmptyRegularFile(at: retainedURL)
+                else {
+                    continue
+                }
+                do {
+                    try markManifestRecoverable(
+                        &manifest,
+                        reason: manifest.interruptionReason ?? .unknown,
+                        projectID: manifest.projectID
+                    )
+                } catch {
+                    continue
+                }
+            }
             recovered.append(
                 RecoverableRecording(
                     projectID: manifest.projectID,
                     recordingID: manifest.recordingID,
                     fileURL: retainedURL,
                     reason: manifest.interruptionReason ?? .unknown,
-                    discoveredAt: manifest.updatedAt
+                    discoveredAt: manifest.updatedAt,
+                    disposition: manifest.state == .damaged
+                        ? .damaged : .pendingReview
                 )
             )
         }
         return recovered.sorted { $0.discoveredAt < $1.discoveredAt }
+    }
+
+    func retainRecoverableRecording(
+        _ recording: RecoverableRecording,
+        duration: TimeInterval
+    ) async throws -> CompletedRecording {
+        guard duration.isFinite, duration > 0 else {
+            throw CaptureError.fileFinalizationFailed
+        }
+        var manifest = try readManifest(projectID: recording.projectID)
+        guard
+            manifest.recordingID == recording.recordingID,
+            manifest.state == .recoverable
+                || manifest.state == .recording
+                || manifest.state == .prepared
+                || manifest.state == .retaining
+        else {
+            throw CaptureError.fileFinalizationFailed
+        }
+        let locations = urls(for: manifest)
+        let sourceURL: URL
+        if fileManager.fileExists(atPath: locations.temporary.path) {
+            sourceURL = locations.temporary
+        } else if fileManager.fileExists(atPath: locations.final.path) {
+            sourceURL = locations.final
+        } else {
+            throw CaptureError.fileFinalizationFailed
+        }
+
+        manifest.schemaVersion = 2
+        manifest.state = .retaining
+        manifest.updatedAt = now()
+        try write(manifest, projectID: recording.projectID)
+
+        if sourceURL != locations.final {
+            guard !fileManager.fileExists(atPath: locations.final.path) else {
+                throw CaptureError.fileFinalizationFailed
+            }
+            do {
+                try fileManager.moveItem(at: sourceURL, to: locations.final)
+            } catch {
+                throw CaptureError.fileFinalizationFailed
+            }
+        }
+
+        manifest.state = .retainedInterrupted
+        manifest.duration = duration
+        manifest.updatedAt = now()
+        do {
+            try write(manifest, projectID: recording.projectID)
+        } catch {
+            // The manifest remains in the recoverable `retaining` state and
+            // startup scanning finds the file at either supported location.
+            throw CaptureError.fileFinalizationFailed
+        }
+        return CompletedRecording(
+            projectID: recording.projectID,
+            recordingID: recording.recordingID,
+            fileURL: locations.final,
+            duration: duration,
+            completedAt: manifest.updatedAt,
+            origin: .interruptedRecovery
+        )
+    }
+
+    func markRecoverableRecordingDamaged(
+        _ recording: RecoverableRecording
+    ) async throws -> RecoverableRecording {
+        var manifest = try readManifest(projectID: recording.projectID)
+        guard
+            manifest.recordingID == recording.recordingID,
+            manifest.state != .completed,
+            manifest.state != .retainedInterrupted
+        else {
+            throw CaptureError.fileFinalizationFailed
+        }
+        manifest.schemaVersion = 2
+        manifest.state = .damaged
+        manifest.updatedAt = now()
+        try write(manifest, projectID: recording.projectID)
+        var updated = recording
+        updated.disposition = .damaged
+        return updated
+    }
+
+    func deleteRecoverableRecording(
+        projectID: UUID,
+        recordingID: UUID
+    ) async throws {
+        let manifest = try readManifest(projectID: projectID)
+        guard
+            manifest.recordingID == recordingID,
+            manifest.state != .completed,
+            manifest.state != .retainedInterrupted
+        else {
+            throw CaptureError.fileFinalizationFailed
+        }
+        try await deleteProject(projectID: projectID)
     }
 
     func deleteProject(projectID: UUID) async throws {
@@ -278,6 +412,20 @@ actor RecordingFileStore: RecordingFileStoring {
             return recording.finalURL
         }
         return nil
+    }
+
+    private func isNonEmptyRegularFile(at url: URL) -> Bool {
+        guard
+            let values = try? url.resourceValues(
+                forKeys: [.isRegularFileKey, .fileSizeKey]
+            ),
+            values.isRegularFile == true,
+            let size = values.fileSize,
+            size > 0
+        else {
+            return false
+        }
+        return true
     }
 
     private func prepareProjectDirectory(
@@ -321,6 +469,7 @@ actor RecordingFileStore: RecordingFileStoring {
         reason: CaptureInterruptionReason,
         projectID: UUID
     ) throws {
+        manifest.schemaVersion = 2
         manifest.state = .recoverable
         manifest.updatedAt = now()
         manifest.interruptionReason = reason

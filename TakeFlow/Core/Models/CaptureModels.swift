@@ -71,7 +71,9 @@ struct CaptureFocusExposureLockState: Equatable, Sendable {
     }
 }
 
-enum CaptureInterruptionReason: String, Codable, CaseIterable, Sendable {
+enum CaptureInterruptionReason: String, Codable, CaseIterable, Hashable,
+    Sendable
+{
     case applicationBackgrounded
     case audioSessionInterrupted
     case cameraUnavailable
@@ -80,6 +82,7 @@ enum CaptureInterruptionReason: String, Codable, CaseIterable, Sendable {
     case videoDeviceNotAvailableWithMultipleForegroundApps
     case videoDeviceNotAvailableDueToSystemPressure
     case sensitiveContentMitigationActivated
+    case mediaServicesLost
     case mediaServicesReset
     case storageSpaceLow
     case unknown
@@ -90,6 +93,187 @@ enum CaptureInterruptionSource: String, Codable, Hashable, Sendable {
     case audioSession
     case applicationLifecycle
     case storageMonitor
+}
+
+enum InterruptionEpisodeSource: String, Codable, Hashable, Sendable {
+    case applicationBackgrounded
+    case captureSession
+    case audioSession
+    case cameraInUseByAnotherClient
+    case microphoneInUseByAnotherClient
+    case systemPressure
+    case mediaServices
+    case unknownSystem
+}
+
+struct AudioInterruptionDetails: Equatable, Sendable {
+    let rawType: UInt?
+    let rawReason: UInt?
+    let wasSuspended: Bool
+
+    static let unspecified = AudioInterruptionDetails(
+        rawType: nil,
+        rawReason: nil,
+        wasSuspended: false
+    )
+}
+
+struct InterruptionEpisode: Equatable, Sendable {
+    let id: UUID
+    var recordingID: UUID?
+    let captureSessionID: UUID
+    let lifecycleGeneration: UInt64
+    private(set) var sources: Set<InterruptionEpisodeSource>
+    private(set) var reasons: Set<CaptureInterruptionReason>
+    let firstOccurredAt: Date
+    private(set) var occurredDuringRecording: Bool
+    private(set) var didRequestFinalization: Bool
+    private(set) var didFinishAVFoundationFinalization: Bool
+    private(set) var didResolveAVFoundationFinalization: Bool
+    private(set) var didCommitRecoveryManifest: Bool
+    private(set) var didResolveRecoveryManifest: Bool
+    private(set) var requiresManualReprepare: Bool
+    private(set) var primaryReason: CaptureInterruptionReason
+
+    init(
+        id: UUID = UUID(),
+        recordingID: UUID?,
+        captureSessionID: UUID,
+        lifecycleGeneration: UInt64,
+        source: InterruptionEpisodeSource,
+        reason: CaptureInterruptionReason,
+        occurredDuringRecording: Bool,
+        firstOccurredAt: Date = .now
+    ) {
+        self.id = id
+        self.recordingID = recordingID
+        self.captureSessionID = captureSessionID
+        self.lifecycleGeneration = lifecycleGeneration
+        sources = [source]
+        reasons = [reason]
+        self.firstOccurredAt = firstOccurredAt
+        self.occurredDuringRecording = occurredDuringRecording
+        didRequestFinalization = false
+        didFinishAVFoundationFinalization = false
+        didResolveAVFoundationFinalization = false
+        didCommitRecoveryManifest = false
+        didResolveRecoveryManifest = false
+        requiresManualReprepare = true
+        primaryReason = reason
+    }
+
+    mutating func merge(
+        source: InterruptionEpisodeSource,
+        reason: CaptureInterruptionReason,
+        recordingID: UUID?,
+        occurredDuringRecording: Bool = false
+    ) {
+        sources.insert(source)
+        reasons.insert(reason)
+        if self.recordingID == nil {
+            self.recordingID = recordingID
+        }
+        if occurredDuringRecording {
+            self.occurredDuringRecording = true
+        }
+        if Self.priority(of: reason) > Self.priority(of: primaryReason) {
+            primaryReason = reason
+        }
+    }
+
+    mutating func requestFinalizationIfNeeded() -> Bool {
+        guard
+            recordingID != nil,
+            !didRequestFinalization,
+            !didResolveAVFoundationFinalization
+        else {
+            return false
+        }
+        didRequestFinalization = true
+        return true
+    }
+
+    mutating func markAVFoundationFinalized() {
+        didFinishAVFoundationFinalization = true
+        didResolveAVFoundationFinalization = true
+    }
+
+    mutating func markAVFoundationFinalizationFailed() {
+        didResolveAVFoundationFinalization = true
+    }
+
+    mutating func markRecoveryManifestCommitted() {
+        didCommitRecoveryManifest = true
+        didResolveRecoveryManifest = true
+    }
+
+    mutating func markRecoveryManifestFailed() {
+        didResolveRecoveryManifest = true
+    }
+
+    mutating func markRecoveryManifestNotRequired() {
+        didResolveRecoveryManifest = true
+    }
+
+    mutating func clearManualReprepareAfterNewSessionReady() {
+        requiresManualReprepare = false
+    }
+
+    var isWaitingForRecoveryCommit: Bool {
+        guard recordingID != nil else {
+            return false
+        }
+        return !didResolveAVFoundationFinalization
+            || (occurredDuringRecording && !didResolveRecoveryManifest)
+    }
+
+    static func source(
+        for reason: CaptureInterruptionReason
+    ) -> InterruptionEpisodeSource {
+        switch reason {
+        case .applicationBackgrounded:
+            .applicationBackgrounded
+        case .audioSessionInterrupted:
+            .audioSession
+        case .audioDeviceInUseByAnotherClient:
+            .microphoneInUseByAnotherClient
+        case .videoDeviceInUseByAnotherClient,
+             .videoDeviceNotAvailableWithMultipleForegroundApps:
+            .cameraInUseByAnotherClient
+        case .videoDeviceNotAvailableDueToSystemPressure,
+             .sensitiveContentMitigationActivated:
+            .systemPressure
+        case .mediaServicesReset:
+            .mediaServices
+        case .mediaServicesLost:
+            .mediaServices
+        case .cameraUnavailable, .unknown, .storageSpaceLow:
+            .unknownSystem
+        }
+    }
+
+    private static func priority(
+        of reason: CaptureInterruptionReason
+    ) -> Int {
+        switch reason {
+        case .mediaServicesLost, .mediaServicesReset:
+            600
+        case .videoDeviceNotAvailableDueToSystemPressure,
+             .sensitiveContentMitigationActivated:
+            500
+        case .applicationBackgrounded:
+            400
+        case .videoDeviceInUseByAnotherClient,
+             .videoDeviceNotAvailableWithMultipleForegroundApps:
+            300
+        case .audioDeviceInUseByAnotherClient:
+            220
+        case .audioSessionInterrupted:
+            200
+        case .cameraUnavailable, .unknown, .storageSpaceLow:
+            100
+        }
+    }
 }
 
 struct AudioInputRoute: Codable, Equatable, Sendable {
@@ -106,8 +290,10 @@ struct AudioInputRoute: Codable, Equatable, Sendable {
 
 enum AudioSessionEvent: Equatable, Sendable {
     case routeChanged(AudioInputRoute)
-    case interruptionBegan
-    case interruptionEnded
+    case interruptionBegan(AudioInterruptionDetails)
+    case interruptionEnded(AudioInterruptionDetails)
+    case mediaServicesWereLost
+    case mediaServicesWereReset
 }
 
 struct CaptureConfiguration: Codable, Equatable, Sendable {

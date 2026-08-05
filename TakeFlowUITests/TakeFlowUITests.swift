@@ -511,9 +511,232 @@ final class TakeFlowUITests: XCTestCase {
 
         let notice = app.descendants(matching: .any)["capture.notice"]
         XCTAssertTrue(notice.waitForExistence(timeout: 5))
-        XCTAssertTrue(notice.label.contains("可恢复片段"))
+        XCTAssertTrue(
+            notice.label.contains("发现中断录制片段"),
+            "实际提示：\(notice.label)"
+        )
         XCTAssertFalse(app.buttons["capture.localPreview"].isEnabled)
         XCTAssertFalse(app.buttons["capture.switchCamera"].isEnabled)
+
+        let recoveryList = app.descendants(matching: .any)[
+            "capture.recoveryList"
+        ]
+        XCTAssertTrue(recoveryList.waitForExistence(timeout: 5))
+        let recoveryCards = app.descendants(matching: .any).matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@",
+                "capture.recoveryCard."
+            )
+        )
+        let firstRecoveryCard = recoveryCards.firstMatch
+        XCTAssertTrue(firstRecoveryCard.waitForExistence(timeout: 3))
+        XCTAssertTrue(firstRecoveryCard.isHittable)
+        XCTAssertTrue(
+            app.staticTexts["发现中断录制片段"].waitForExistence(timeout: 3)
+        )
+        let retry = app.buttons["capture.retry"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 3))
+        XCTAssertEqual(retry.label, "重新准备摄像头")
+        XCTAssertTrue(retry.isHittable)
+        let inspect = app.buttons.matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@",
+                "capture.recoveryInspect."
+            )
+        ).firstMatch
+        XCTAssertTrue(inspect.waitForExistence(timeout: 3))
+        XCTAssertTrue(inspect.isHittable)
+        inspect.tap()
+
+        let warning = app.descendants(matching: .any)[
+            "capture.recoveryWarning"
+        ]
+        let reviewSheet = app.descendants(matching: .any)[
+            "capture.recoveryReviewSheet"
+        ]
+        XCTAssertTrue(reviewSheet.waitForExistence(timeout: 5))
+        XCTAssertTrue(warning.waitForExistence(timeout: 5))
+        XCTAssertTrue(warning.label.contains("中断片段，可能不完整"))
+        XCTAssertTrue(
+            app.descendants(matching: .any)[
+                "capture.recoveryAudioStatus"
+            ].waitForExistence(timeout: 3)
+        )
+        XCTAssertTrue(app.buttons["capture.recoveryPlayback"].exists)
+
+        app.buttons["capture.recoveryRetain"].tap()
+        XCTAssertTrue(
+            app.descendants(matching: .any)[
+                "capture.recoveryRetained"
+            ].waitForExistence(timeout: 5)
+        )
+        XCTAssertTrue(app.buttons["capture.recoveryPlayback"].exists)
+        XCTAssertTrue(app.buttons["capture.recoveryLater"].exists)
+
+        let playback = app.buttons["capture.recoveryPlayback"]
+        playback.tap()
+        expectation(
+            for: NSPredicate(format: "label == %@", "暂停视频"),
+            evaluatedWith: playback
+        )
+        waitForExpectations(timeout: 2)
+        let activePlayerCount = app.descendants(matching: .any)[
+            "capture.debugActivePlayerCount"
+        ]
+        expectation(
+            for: NSPredicate(format: "label == %@", "活动播放器 1"),
+            evaluatedWith: activePlayerCount
+        )
+        waitForExpectations(timeout: 2)
+
+        let dragStart = reviewSheet.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.02)
+        )
+        let dragEnd = reviewSheet.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.92)
+        )
+        dragStart.press(
+            forDuration: 0.05,
+            thenDragTo: dragEnd,
+            withVelocity: .fast,
+            thenHoldForDuration: 0
+        )
+        XCTAssertTrue(reviewSheet.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(warning.waitForNonExistence(timeout: 5))
+        expectation(
+            for: NSPredicate(format: "label == %@", "活动播放器 0"),
+            evaluatedWith: activePlayerCount
+        )
+        waitForExpectations(timeout: 2)
+        XCTAssertTrue(retry.waitForExistence(timeout: 3))
+        XCTAssertEqual(retry.label, "重新准备摄像头")
+        XCTAssertTrue(recoveryList.exists)
+        XCTAssertTrue(
+            app.descendants(matching: .any).matching(
+                NSPredicate(
+                    format: "identifier BEGINSWITH %@",
+                    "capture.recoveryCard."
+                )
+            ).firstMatch.exists
+        )
+    }
+
+    @MainActor
+    func testTwoRecoverableCardsAndRetryRemainHittableInCompactHeight()
+        throws
+    {
+        let device = XCUIDevice.shared
+        device.orientation = .portrait
+        defer {
+            device.orientation = .portrait
+        }
+
+        let app = launchCaptureApp(
+            extraArguments: [
+                "-ui-testing-capture-interruption-ends",
+                "-UIPreferredContentSizeCategoryName",
+                "UICTContentSizeCategoryAccessibilityExtraExtraExtraLarge"
+            ]
+        )
+        createScriptAndOpenCapture(
+            app: app,
+            content: "紧凑高度双恢复片段"
+        )
+        waitForCaptureState(app, containing: "预览已就绪", timeout: 5)
+
+        app.buttons["capture.record"].tap()
+        waitForCaptureState(app, containing: "正在录制", timeout: 6)
+        let triggerInterruption =
+            app.buttons["capture.debugTriggerInterruption"]
+        XCTAssertTrue(triggerInterruption.waitForExistence(timeout: 3))
+        triggerInterruption.tap()
+        waitForRecoveryCardCount(1, in: app, timeout: 6)
+
+        let retry = app.buttons["capture.retry"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 3))
+        XCTAssertTrue(retry.isHittable)
+        retry.tap()
+        waitForCaptureState(app, containing: "预览已就绪", timeout: 6)
+
+        app.buttons["capture.record"].tap()
+        waitForCaptureState(app, containing: "正在录制", timeout: 6)
+        XCTAssertTrue(triggerInterruption.waitForExistence(timeout: 3))
+        triggerInterruption.tap()
+        waitForRecoveryCardCount(2, in: app, timeout: 6)
+
+        device.orientation = .landscapeLeft
+        let recoveryPanel = app.descendants(matching: .any)[
+            "capture.recoveryActionPanel"
+        ]
+        XCTAssertTrue(recoveryPanel.waitForExistence(timeout: 5))
+
+        let recoveryCards = app.descendants(matching: .any).matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@",
+                "capture.recoveryCard."
+            )
+        )
+        XCTAssertEqual(recoveryCards.count, 2)
+        XCTAssertTrue(recoveryCards.element(boundBy: 0).exists)
+        XCTAssertTrue(recoveryCards.element(boundBy: 0).isHittable)
+
+        let inspectButtons = app.buttons.matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@",
+                "capture.recoveryInspect."
+            )
+        )
+        XCTAssertEqual(inspectButtons.count, 2)
+        XCTAssertTrue(inspectButtons.element(boundBy: 0).isHittable)
+        XCTAssertTrue(retry.exists)
+        XCTAssertEqual(retry.label, "重新准备摄像头")
+        XCTAssertTrue(retry.isHittable)
+
+        let recoveryList = app.descendants(matching: .any)[
+            "capture.recoveryList"
+        ]
+        XCTAssertTrue(recoveryList.exists)
+        XCTAssertTrue(recoveryList.isHittable)
+        recoveryList.swipeLeft()
+        XCTAssertTrue(recoveryCards.element(boundBy: 1).exists)
+        XCTAssertTrue(recoveryCards.element(boundBy: 1).isHittable)
+        XCTAssertTrue(inspectButtons.element(boundBy: 1).isHittable)
+        XCTAssertTrue(retry.isHittable)
+    }
+
+    @MainActor
+    func testRecoverableRecordingDeletionRequiresConfirmation() throws {
+        let app = launchCaptureApp(
+            extraArguments: ["-ui-testing-capture-interrupted"]
+        )
+        createScriptAndOpenCapture(app: app, content: "中断片段删除确认")
+        waitForCaptureState(app, containing: "预览已就绪", timeout: 5)
+
+        app.buttons["capture.record"].tap()
+        waitForCaptureState(app, containing: "正在录制", timeout: 6)
+        let inspect = app.buttons.matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@",
+                "capture.recoveryInspect."
+            )
+        ).firstMatch
+        XCTAssertTrue(inspect.waitForExistence(timeout: 5))
+        inspect.tap()
+        XCTAssertTrue(
+            app.descendants(matching: .any)[
+                "capture.recoveryWarning"
+            ].waitForExistence(timeout: 5)
+        )
+
+        app.buttons["capture.recoveryDelete"].tap()
+        let confirmation = app.sheets["确认删除中断片段？"]
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 3))
+        confirmation.buttons["删除片段"].tap()
+        XCTAssertTrue(
+            app.descendants(matching: .any)[
+                "capture.recoveryWarning"
+            ].waitForNonExistence(timeout: 5)
+        )
     }
 
     @MainActor
@@ -528,9 +751,18 @@ final class TakeFlowUITests: XCTestCase {
             content: "中断结束后由用户重新准备摄像头"
         )
         waitForCaptureState(app, containing: "预览已就绪", timeout: 5)
+        XCTAssertFalse(
+            app.buttons["capture.debugTriggerInterruption"].exists
+        )
 
         app.buttons["capture.record"].tap()
         waitForCaptureState(app, containing: "正在录制", timeout: 6)
+
+        let triggerInterruption =
+            app.buttons["capture.debugTriggerInterruption"]
+        XCTAssertTrue(triggerInterruption.waitForExistence(timeout: 3))
+        triggerInterruption.tap()
+
         waitForCaptureState(
             app,
             containing: "请重新准备摄像头",
@@ -541,11 +773,32 @@ final class TakeFlowUITests: XCTestCase {
         XCTAssertTrue(retry.waitForExistence(timeout: 3))
         XCTAssertEqual(retry.label, "重新准备摄像头")
         XCTAssertFalse(app.buttons["capture.switchCamera"].isEnabled)
+
+        let inspect = app.buttons.matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@",
+                "capture.recoveryInspect."
+            )
+        ).firstMatch
+        XCTAssertTrue(inspect.waitForExistence(timeout: 3))
+        inspect.tap()
+        let later = app.buttons["capture.recoveryLater"]
+        XCTAssertTrue(later.waitForExistence(timeout: 5))
+        later.tap()
+        XCTAssertTrue(retry.waitForExistence(timeout: 3))
+        XCTAssertEqual(retry.label, "重新准备摄像头")
+        XCTAssertTrue(inspect.waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["capture.switchCamera"].isEnabled)
+
         retry.tap()
 
         waitForCaptureState(app, containing: "预览已就绪", timeout: 5)
         XCTAssertTrue(app.buttons["capture.record"].isEnabled)
         XCTAssertTrue(app.buttons["capture.switchCamera"].isEnabled)
+        XCTAssertFalse(
+            app.buttons["capture.debugTriggerInterruption"].exists
+        )
+        XCTAssertFalse(app.staticTexts["capture.duration"].exists)
     }
 
     @MainActor
@@ -586,7 +839,9 @@ final class TakeFlowUITests: XCTestCase {
     func testCaptureCanRecordSwitchAndRecordAgainWithoutLeaving()
         throws
     {
-        let app = launchCaptureApp()
+        let app = launchCaptureApp(
+            extraArguments: ["-ui-testing-capture-skip-countdown"]
+        )
         createScriptAndOpenCapture(
             app: app,
             content: String(repeating: "连续完成两次录制。\n", count: 30)
@@ -996,6 +1251,37 @@ final class TakeFlowUITests: XCTestCase {
             evaluatedWith: app.staticTexts["capture.state"]
         )
         waitForExpectations(timeout: timeout)
+    }
+
+    @MainActor
+    private func waitForRecoveryCardCount(
+        _ expectedCount: Int,
+        in app: XCUIApplication,
+        timeout: TimeInterval
+    ) {
+        let cards = app.descendants(matching: .any).matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@",
+                "capture.recoveryCard."
+            )
+        )
+        let predicate = NSPredicate { _, _ in
+            cards.count == expectedCount
+        }
+        let countExpectation = XCTNSPredicateExpectation(
+            predicate: predicate,
+            object: app
+        )
+        let result = XCTWaiter.wait(
+            for: [countExpectation],
+            timeout: timeout
+        )
+        XCTAssertEqual(
+            result,
+            .completed,
+            "恢复卡片数量未在 \(timeout) 秒内变为 \(expectedCount)，"
+                + "实际为 \(cards.count)"
+        )
     }
 
     @MainActor

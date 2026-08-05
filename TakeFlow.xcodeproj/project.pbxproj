@@ -82,6 +82,8 @@
 		C00000000000000000000079 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000079 /* PrivacyInfo.xcprivacy */; };
 		C0000000000000000000007B /* LocalRecordingPlayerControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000007B /* LocalRecordingPlayerControllerTests.swift */; };
 		C0000000000000000000007D /* RecordingElapsedTimekeeperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000007D /* RecordingElapsedTimekeeperTests.swift */; };
+		C0000000000000000000007E /* RecoverableMediaValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000007E /* RecoverableMediaValidator.swift */; };
+		C0000000000000000000007F /* RecoverableMediaValidatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000007F /* RecoverableMediaValidatorTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -194,6 +196,8 @@
 		B00000000000000000000079 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		B0000000000000000000007B /* LocalRecordingPlayerControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalRecordingPlayerControllerTests.swift; sourceTree = "<group>"; };
 		B0000000000000000000007D /* RecordingElapsedTimekeeperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingElapsedTimekeeperTests.swift; sourceTree = "<group>"; };
+		B0000000000000000000007E /* RecoverableMediaValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoverableMediaValidator.swift; sourceTree = "<group>"; };
+		B0000000000000000000007F /* RecoverableMediaValidatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoverableMediaValidatorTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -386,6 +390,7 @@
 				B00000000000000000000073 /* CameraRecordingView.swift */,
 				B0000000000000000000007A /* LocalRecordingPreviewView.swift */,
 				B0000000000000000000007C /* RecordingElapsedTimekeeper.swift */,
+				B0000000000000000000007E /* RecoverableMediaValidator.swift */,
 			);
 			path = CameraRecording;
 			sourceTree = "<group>";
@@ -462,6 +467,7 @@
 				B00000000000000000000078 /* CameraTeleprompterIntegrationTests.swift */,
 				B0000000000000000000007B /* LocalRecordingPlayerControllerTests.swift */,
 				B0000000000000000000007D /* RecordingElapsedTimekeeperTests.swift */,
+				B0000000000000000000007F /* RecoverableMediaValidatorTests.swift */,
 			);
 			path = TakeFlowTests;
 			sourceTree = "<group>";
@@ -677,6 +683,7 @@
 				C00000000000000000000073 /* CameraRecordingView.swift in Sources */,
 				C0000000000000000000007A /* LocalRecordingPreviewView.swift in Sources */,
 				C0000000000000000000007C /* RecordingElapsedTimekeeper.swift in Sources */,
+				C0000000000000000000007E /* RecoverableMediaValidator.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -705,6 +712,7 @@
 				C00000000000000000000078 /* CameraTeleprompterIntegrationTests.swift in Sources */,
 				C0000000000000000000007B /* LocalRecordingPlayerControllerTests.swift in Sources */,
 				C0000000000000000000007D /* RecordingElapsedTimekeeperTests.swift in Sources */,
+				C0000000000000000000007F /* RecoverableMediaValidatorTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

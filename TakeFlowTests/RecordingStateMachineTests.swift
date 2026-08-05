@@ -1,3 +1,4 @@
+import AVFoundation
 import XCTest
 @testable import TakeFlow
 
@@ -409,6 +410,32 @@ final class RecordingStateMachineTests: XCTestCase {
         )
     }
 
+    func testAVFoundationRuntimeErrorRecognizesOnlyMediaServicesReset() {
+        let resetError = NSError(
+            domain: AVFoundationErrorDomain,
+            code: AVError.Code.mediaServicesWereReset.rawValue
+        )
+        let unrelatedError = NSError(
+            domain: AVFoundationErrorDomain,
+            code: AVError.Code.deviceWasDisconnected.rawValue
+        )
+
+        XCTAssertTrue(
+            AVFoundationCaptureService
+                .isMediaServicesResetRuntimeError(resetError)
+        )
+        XCTAssertFalse(
+            AVFoundationCaptureService
+                .isMediaServicesResetRuntimeError(unrelatedError)
+        )
+        XCTAssertFalse(
+            AVFoundationCaptureService
+                .isMediaServicesResetRuntimeError(
+                    NSError(domain: NSCocoaErrorDomain, code: 0)
+                )
+        )
+    }
+
     func testOldRecordingIDCannotStopCurrentRecording() throws {
         let currentID = UUID()
         var machine = try makeRecordingMachine(recordingID: currentID)
@@ -483,6 +510,114 @@ final class RecordingStateMachineTests: XCTestCase {
                 reason: .applicationBackgrounded
             )
         )
+    }
+
+    func testInterruptionEpisodeKeepsHighestPriorityReason() {
+        let recordingID = UUID()
+        var episode = InterruptionEpisode(
+            recordingID: recordingID,
+            captureSessionID: UUID(),
+            lifecycleGeneration: 7,
+            source: .applicationBackgrounded,
+            reason: .applicationBackgrounded,
+            occurredDuringRecording: true
+        )
+
+        episode.merge(
+            source: .audioSession,
+            reason: .audioSessionInterrupted,
+            recordingID: recordingID
+        )
+        episode.merge(
+            source: .cameraInUseByAnotherClient,
+            reason: .videoDeviceInUseByAnotherClient,
+            recordingID: recordingID
+        )
+
+        XCTAssertEqual(episode.primaryReason, .applicationBackgrounded)
+        XCTAssertEqual(
+            episode.sources,
+            Set([
+                .applicationBackgrounded,
+                .audioSession,
+                .cameraInUseByAnotherClient
+            ])
+        )
+        XCTAssertEqual(episode.reasons.count, 3)
+    }
+
+    func testInterruptionEpisodeRequestsFinalizationOnlyOnce() {
+        var episode = InterruptionEpisode(
+            recordingID: UUID(),
+            captureSessionID: UUID(),
+            lifecycleGeneration: 4,
+            source: .captureSession,
+            reason: .unknown,
+            occurredDuringRecording: true
+        )
+
+        XCTAssertTrue(episode.requestFinalizationIfNeeded())
+        XCTAssertFalse(episode.requestFinalizationIfNeeded())
+        XCTAssertTrue(episode.didRequestFinalization)
+    }
+
+    func testInterruptionEpisodeWaitsForFileAndManifestBeforeRecovery() {
+        var episode = InterruptionEpisode(
+            recordingID: UUID(),
+            captureSessionID: UUID(),
+            lifecycleGeneration: 2,
+            source: .mediaServices,
+            reason: .mediaServicesReset,
+            occurredDuringRecording: true
+        )
+
+        XCTAssertTrue(episode.isWaitingForRecoveryCommit)
+        episode.markAVFoundationFinalized()
+        XCTAssertTrue(episode.isWaitingForRecoveryCommit)
+        episode.markRecoveryManifestCommitted()
+        XCTAssertFalse(episode.isWaitingForRecoveryCommit)
+        XCTAssertTrue(episode.requiresManualReprepare)
+    }
+
+    func testInterruptionEpisodeManifestFailureResolvesWaitingWithoutSuccess() {
+        var episode = InterruptionEpisode(
+            recordingID: UUID(),
+            captureSessionID: UUID(),
+            lifecycleGeneration: 3,
+            source: .captureSession,
+            reason: .unknown,
+            occurredDuringRecording: true
+        )
+
+        episode.markAVFoundationFinalized()
+        episode.markRecoveryManifestFailed()
+
+        XCTAssertFalse(episode.isWaitingForRecoveryCommit)
+        XCTAssertTrue(episode.didFinishAVFoundationFinalization)
+        XCTAssertTrue(episode.didResolveRecoveryManifest)
+        XCTAssertFalse(episode.didCommitRecoveryManifest)
+        XCTAssertTrue(episode.requiresManualReprepare)
+    }
+
+    func testInterruptionEpisodeLatchClearsOnlyAfterNewSessionReady() {
+        var episode = InterruptionEpisode(
+            recordingID: nil,
+            captureSessionID: UUID(),
+            lifecycleGeneration: 1,
+            source: .audioSession,
+            reason: .audioSessionInterrupted,
+            occurredDuringRecording: false
+        )
+
+        episode.merge(
+            source: .captureSession,
+            reason: .unknown,
+            recordingID: nil
+        )
+        XCTAssertTrue(episode.requiresManualReprepare)
+
+        episode.clearManualReprepareAfterNewSessionReady()
+        XCTAssertFalse(episode.requiresManualReprepare)
     }
 
     func testStorageThresholdsAreCentralizedAndOrdered() {

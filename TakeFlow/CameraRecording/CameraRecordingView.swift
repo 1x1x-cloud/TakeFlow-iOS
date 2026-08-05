@@ -3,17 +3,23 @@ import SwiftUI
 struct CameraRecordingView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @StateObject private var recordingViewModel: CameraRecordingViewModel
     @StateObject private var teleprompterViewModel: TeleprompterViewModel
     @StateObject private var localRecordingPlayer:
         LocalRecordingPlayerController
     @State private var showsLocalPreview = false
+    @State private var selectedRecoverableRecordingID: UUID?
     @State private var isClosing = false
     @State private var focusRequest: CaptureFocusRequest?
     @State private var focusIndicator: CaptureFocusIndicator?
     @State private var focusIndicatorDismissTask: Task<Void, Never>?
     @State private var focusOperationTask: Task<Void, Never>?
     @State private var focusLockTask: Task<Void, Never>?
+#if DEBUG
+    @State private var recoveryVisibleSafeAreaFrame = CGRect.zero
+#endif
 
     private static let focusCoordinateSpace = "camera-recording-focus"
 
@@ -86,18 +92,33 @@ struct CameraRecordingView: View {
                             )
                     }
 
-                    VStack(spacing: 12) {
+                    VStack(spacing: cameraOverlaySpacing) {
                         topControls
+                            .layoutPriority(4)
                         Spacer()
                         statusOverlay
+                            .layoutPriority(0)
+                        if shouldShowRecoveryActionPanel {
+                            recoveryActionPanel
+                                .layoutPriority(3)
+                        }
                         bottomControls
+                            .layoutPriority(4)
                     }
-                    .padding()
+                    .padding(cameraOverlayPadding)
                 }
                 .coordinateSpace(name: Self.focusCoordinateSpace)
                 .onChange(of: timeline.date) {
                     teleprompterViewModel.tick()
                 }
+#if DEBUG
+                .onChange(of: geometry.size, initial: true) {
+                    updateRecoverySafeAreaFrame(in: geometry)
+                }
+                .onChange(of: geometry.safeAreaInsets) {
+                    updateRecoverySafeAreaFrame(in: geometry)
+                }
+#endif
             }
         }
         .background(.black)
@@ -125,6 +146,14 @@ struct CameraRecordingView: View {
                 break
             }
         }
+#if DEBUG
+        .onChange(
+            of: recordingViewModel.recoverableReviewItems,
+            initial: true
+        ) { _, items in
+            recordingViewModel.recordSwiftUIRecoverableItemsObserved(items)
+        }
+#endif
         .onChange(
             of: recordingViewModel.focusAndExposureFeedbackGeneration
         ) {
@@ -145,6 +174,15 @@ struct CameraRecordingView: View {
             }
         ) {
             localPreview
+        }
+        .sheet(
+            isPresented: recoverableReviewPresented,
+            onDismiss: {
+                localRecordingPlayer.close()
+                selectedRecoverableRecordingID = nil
+            }
+        ) {
+            recoverableReview
         }
         .alert(
             TeleprompterStrings.errorTitle,
@@ -333,91 +371,220 @@ struct CameraRecordingView: View {
         .background(.ultraThinMaterial, in: Capsule())
     }
 
-    @ViewBuilder
     private var statusOverlay: some View {
-        if case .starting(let remaining) = recordingViewModel.state {
-            Text("\(remaining)")
-                .font(.system(size: 88, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
-                .accessibilityLabel(
-                    CameraRecordingStrings.recordingCountdown(remaining)
-                )
-                .accessibilityIdentifier("capture.countdown")
-        }
+        VStack(spacing: 8) {
+            if case .starting(let remaining) = recordingViewModel.state {
+                Text("\(remaining)")
+                    .font(
+                        .system(size: 88, weight: .bold, design: .rounded)
+                    )
+                    .foregroundStyle(.white)
+                    .accessibilityLabel(
+                        CameraRecordingStrings.recordingCountdown(remaining)
+                    )
+                    .accessibilityIdentifier("capture.countdown")
+            }
 
-        if case .awaitingRecordingStart = recordingViewModel.state {
-            ProgressView(CameraRecordingStrings.startingRecording)
-                .tint(.white)
+            if case .awaitingRecordingStart = recordingViewModel.state {
+                ProgressView(CameraRecordingStrings.startingRecording)
+                    .tint(.white)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(.black.opacity(0.65), in: Capsule())
+                    .accessibilityIdentifier("capture.startingRecording")
+            }
+
+            if recordingViewModel.state.isActivelyRecording {
+                VStack(spacing: 4) {
+                    Text(
+                        CameraRecordingStrings.duration(
+                            recordingViewModel.recordingDuration
+                        )
+                    )
+                    .monospacedDigit()
+                    .font(.title2.bold())
+                    .accessibilityIdentifier("capture.duration")
+                    Text(CameraRecordingStrings.directionLocked)
+                        .font(.caption)
+                }
                 .foregroundStyle(.white)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
-                .background(.black.opacity(0.65), in: Capsule())
-                .accessibilityIdentifier("capture.startingRecording")
-        }
-
-        if recordingViewModel.state.isActivelyRecording {
-            VStack(spacing: 4) {
-                Text(
-                    CameraRecordingStrings.duration(
-                        recordingViewModel.recordingDuration
-                    )
-                )
-                .monospacedDigit()
-                .font(.title2.bold())
-                .accessibilityIdentifier("capture.duration")
-                Text(CameraRecordingStrings.directionLocked)
-                    .font(.caption)
+                .background(.red.opacity(0.8), in: Capsule())
             }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(.red.opacity(0.8), in: Capsule())
-        }
 
-        if recordingViewModel.state == .ready
-            || recordingViewModel.state.isActivelyRecording {
-            Label(
-                CameraRecordingStrings.audioInput(
-                    recordingViewModel.audioRoute
-                ),
-                systemImage: recordingViewModel.audioRoute.isBluetooth
-                    ? "wave.3.right"
-                    : "mic.fill"
+            if recordingViewModel.state == .ready
+                || recordingViewModel.state.isActivelyRecording {
+                Label(
+                    CameraRecordingStrings.audioInput(
+                        recordingViewModel.audioRoute
+                    ),
+                    systemImage: recordingViewModel.audioRoute.isBluetooth
+                        ? "wave.3.right"
+                        : "mic.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.black.opacity(0.65), in: Capsule())
+                .accessibilityIdentifier("capture.audioRoute")
+            }
+
+            if !shouldShowRecoveryActionPanel,
+               let notice = recordingViewModel.noticeMessage {
+                recoveryNoticeText(
+                    notice,
+                    identifier: "capture.notice"
+                )
+            }
+
+            if !shouldShowRecoveryActionPanel,
+               let notice = recordingViewModel.interruptionNoticeMessage {
+                recoveryNoticeText(
+                    notice,
+                    identifier: "capture.interruptionNotice"
+                )
+            }
+
+            if let notice =
+                recordingViewModel.focusAndExposureNoticeMessage {
+                Text(notice)
+                    .font(.subheadline)
+                    .foregroundStyle(.white)
+                    .padding(8)
+                    .background(.black.opacity(0.65), in: Capsule())
+                    .accessibilityIdentifier("capture.focusNotice")
+            }
+
+#if DEBUG
+            if recordingViewModel.canTriggerInterruptionAndEndForUITesting {
+                Button("触发测试中断") {
+                    Task {
+                        await recordingViewModel
+                            .triggerInterruptionAndEndForUITesting()
+                    }
+                }
+                .accessibilityIdentifier(
+                    "capture.debugTriggerInterruption"
+                )
+            }
+
+            if recordingViewModel.isFakePreview {
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .accessibilityElement()
+                    .accessibilityLabel(
+                        "活动播放器 "
+                            + "\(localRecordingPlayer.activeSessionCount)"
+                    )
+                    .accessibilityIdentifier(
+                        "capture.debugActivePlayerCount"
+                    )
+            }
+#endif
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var shouldShowRecoveryActionPanel: Bool {
+        !recordingViewModel.recoverableReviewItems.isEmpty
+            || recordingViewModel.shouldShowManualReprepare
+    }
+
+    private var usesCompactRecoveryLayout: Bool {
+        verticalSizeClass == .compact
+    }
+
+    private var cameraOverlaySpacing: CGFloat {
+        usesCompactRecoveryLayout ? 6 : 12
+    }
+
+    private var cameraOverlayPadding: CGFloat {
+        usesCompactRecoveryLayout ? 8 : 16
+    }
+
+    private var recoveryActionPanel: some View {
+        Group {
+            if usesCompactRecoveryLayout {
+                VStack(spacing: 6) {
+                    HStack(alignment: .center, spacing: 10) {
+                        if !recordingViewModel
+                            .recoverableReviewItems.isEmpty {
+                            recoverableRecordingCards
+                                .layoutPriority(2)
+                        }
+                        manualReprepareButton
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    recoveryMessages(compact: true)
+                }
+            } else {
+                VStack(spacing: 8) {
+                    recoveryMessages(compact: false)
+                    if !recordingViewModel
+                        .recoverableReviewItems.isEmpty {
+                        recoverableRecordingCards
+                    }
+                    manualReprepareButton
+                }
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(
+            .black.opacity(0.42),
+            in: RoundedRectangle(cornerRadius: 16)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("capture.recoveryActionPanel")
+    }
+
+    @ViewBuilder
+    private func recoveryMessages(compact: Bool) -> some View {
+        if let notice = recordingViewModel.interruptionNoticeMessage {
+            recoveryNoticeText(
+                notice,
+                identifier: "capture.interruptionNotice",
+                compact: compact
             )
-            .font(.caption)
-            .foregroundStyle(.white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(.black.opacity(0.65), in: Capsule())
-            .accessibilityIdentifier("capture.audioRoute")
         }
-
         if let notice = recordingViewModel.noticeMessage {
-            Text(notice)
-                .font(.subheadline)
-                .foregroundStyle(.white)
-                .padding(8)
-                .background(.black.opacity(0.65), in: Capsule())
-                .accessibilityIdentifier("capture.notice")
+            recoveryNoticeText(
+                notice,
+                identifier: "capture.notice",
+                compact: compact
+            )
         }
+    }
 
-        if let notice =
-            recordingViewModel.focusAndExposureNoticeMessage {
-            Text(notice)
-                .font(.subheadline)
-                .foregroundStyle(.white)
-                .padding(8)
-                .background(.black.opacity(0.65), in: Capsule())
-                .accessibilityIdentifier("capture.focusNotice")
-        }
+    private func recoveryNoticeText(
+        _ notice: String,
+        identifier: String,
+        compact: Bool = false
+    ) -> some View {
+        Text(notice)
+            .font(.subheadline)
+            .foregroundStyle(.white)
+            .multilineTextAlignment(.center)
+            .lineLimit(compact ? 1 : 3)
+            .frame(maxWidth: .infinity)
+            .accessibilityIdentifier(identifier)
+    }
 
-        if recordingViewModel.canRetryPreparation {
+    @ViewBuilder
+    private var manualReprepareButton: some View {
+        if recordingViewModel.shouldShowManualReprepare {
             Button(retryButtonTitle) {
                 Task {
                     await recordingViewModel.retryPreparation()
                 }
             }
             .buttonStyle(.borderedProminent)
+            .frame(minHeight: 44)
+            .disabled(!recordingViewModel.canRetryPreparation)
             .accessibilityIdentifier("capture.retry")
         }
     }
@@ -538,6 +705,125 @@ struct CameraRecordingView: View {
         .accessibilityIdentifier("capture.localPreview")
     }
 
+    private var recoverableRecordingCards: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 10) {
+                ForEach(recordingViewModel.recoverableReviewItems) { item in
+                    recoverableRecordingCard(item)
+                    .padding(10)
+                    .containerRelativeFrame(
+                        .horizontal,
+                        count: recoveryCardsPerViewport,
+                        span: 1,
+                        spacing: 10
+                    )
+                    .background(
+                        .black.opacity(0.72),
+                        in: RoundedRectangle(cornerRadius: 14)
+                    )
+                    .foregroundStyle(.white)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier(
+                        "capture.recoveryCard.\(item.id.uuidString)"
+                    )
+#if DEBUG
+                    .onAppear {
+                        recordingViewModel.recordRecoveryCardAppeared(
+                            recordingID: item.id
+                        )
+                    }
+                    .background {
+                        recoveryCardFrameDiagnostic(item.id)
+                    }
+#endif
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .scrollTargetBehavior(.viewAligned)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity)
+        .accessibilityIdentifier("capture.recoveryList")
+    }
+
+    private var recoveryCardsPerViewport: Int {
+        horizontalSizeClass == .regular && !usesCompactRecoveryLayout ? 2 : 1
+    }
+
+    @ViewBuilder
+    private func recoverableRecordingCard(
+        _ item: RecoverableRecordingReviewItem
+    ) -> some View {
+        if usesCompactRecoveryLayout {
+            HStack(alignment: .center, spacing: 8) {
+                recoverableRecordingDetails(item, compact: true)
+                Spacer(minLength: 4)
+                recoverableInspectButton(item)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                recoverableRecordingDetails(item, compact: false)
+                recoverableInspectButton(item)
+            }
+        }
+    }
+
+    private func recoverableRecordingDetails(
+        _ item: RecoverableRecordingReviewItem,
+        compact: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(
+                CameraRecordingStrings.recoverableCardTitle,
+                systemImage: "exclamationmark.triangle.fill"
+            )
+            .font(.subheadline.bold())
+            Text(
+                CameraRecordingStrings.recoverableReason(
+                    item.recording.reason
+                )
+            )
+            .font(.caption)
+            .lineLimit(compact ? 1 : nil)
+            Text(
+                item.recording.discoveredAt.formatted(
+                    date: .abbreviated,
+                    time: .shortened
+                )
+            )
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+
+            if let message = recoveryCardMessage(item.state) {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .lineLimit(compact ? 1 : nil)
+            }
+        }
+    }
+
+    private func recoverableInspectButton(
+        _ item: RecoverableRecordingReviewItem
+    ) -> some View {
+        Button {
+            inspectRecoverable(item.id)
+        } label: {
+            if item.state == .validating {
+                ProgressView(CameraRecordingStrings.validatingRecoverable)
+            } else {
+                Text(CameraRecordingStrings.inspectRecoverable)
+            }
+        }
+        .buttonStyle(.borderedProminent)
+        .frame(minHeight: 44)
+        .fixedSize(horizontal: true, vertical: false)
+        .disabled(recoveryCardIsBusy(item.state))
+        .accessibilityIdentifier(
+            "capture.recoveryInspect.\(item.id.uuidString)"
+        )
+    }
+
     @ViewBuilder
     private var localPreview: some View {
         if let recording = recordingViewModel.completedRecording {
@@ -548,6 +834,118 @@ struct CameraRecordingView: View {
             )
         }
     }
+
+    @ViewBuilder
+    private var recoverableReview: some View {
+        if let recordingID = selectedRecoverableRecordingID,
+           let item = recordingViewModel.recoverableItem(
+            recordingID: recordingID
+           ) {
+            RecoverableRecordingReviewView(
+                controller: localRecordingPlayer,
+                item: item,
+                usesFakePreview: usesFakeLocalRecordingPreview,
+                onRetain: {
+                    await recordingViewModel.retainRecoverableRecording(
+                        recordingID: recordingID
+                    )
+                },
+                onDelete: {
+                    await recordingViewModel.deleteRecoverableRecording(
+                        recordingID: recordingID
+                    )
+                }
+            )
+        }
+    }
+
+    private var recoverableReviewPresented: Binding<Bool> {
+        Binding(
+            get: { selectedRecoverableRecordingID != nil },
+            set: { isPresented in
+                if !isPresented {
+                    selectedRecoverableRecordingID = nil
+                }
+            }
+        )
+    }
+
+    private func inspectRecoverable(_ recordingID: UUID) {
+        Task {
+            _ = await recordingViewModel.validateRecoverableRecording(
+                recordingID: recordingID
+            )
+            guard recordingViewModel.recoverableItem(
+                recordingID: recordingID
+            ) != nil else {
+                return
+            }
+            selectedRecoverableRecordingID = recordingID
+        }
+    }
+
+    private func recoveryCardIsBusy(
+        _ state: RecoverableRecordingReviewState
+    ) -> Bool {
+        switch state {
+        case .validating, .retaining, .deleting:
+            true
+        default:
+            false
+        }
+    }
+
+    private func recoveryCardMessage(
+        _ state: RecoverableRecordingReviewState
+    ) -> String? {
+        switch state {
+        case .damaged(let failure):
+            CameraRecordingStrings.recoverableValidationMessage(failure)
+        case .retained:
+            CameraRecordingStrings.recoverableRetained
+        case .operationFailed(let message, _):
+            message
+        default:
+            nil
+        }
+    }
+
+#if DEBUG
+    private func updateRecoverySafeAreaFrame(in geometry: GeometryProxy) {
+        let frame = geometry.frame(in: .global)
+        let insets = geometry.safeAreaInsets
+        recoveryVisibleSafeAreaFrame = CGRect(
+            x: frame.minX + insets.leading,
+            y: frame.minY + insets.top,
+            width: max(0, frame.width - insets.leading - insets.trailing),
+            height: max(0, frame.height - insets.top - insets.bottom)
+        )
+    }
+
+    private func recoveryCardFrameDiagnostic(
+        _ recordingID: UUID
+    ) -> some View {
+        GeometryReader { geometry in
+            let globalFrame = geometry.frame(in: .global)
+            Color.clear
+                .allowsHitTesting(false)
+                .onChange(of: globalFrame, initial: true) { _, frame in
+                    recordingViewModel.recordRecoveryCardFrame(
+                        recordingID: recordingID,
+                        globalFrame: frame,
+                        safeAreaFrame: recoveryVisibleSafeAreaFrame
+                    )
+                }
+                .onChange(of: recoveryVisibleSafeAreaFrame) { _, safeFrame in
+                    recordingViewModel.recordRecoveryCardFrame(
+                        recordingID: recordingID,
+                        globalFrame: globalFrame,
+                        safeAreaFrame: safeFrame
+                    )
+                }
+        }
+    }
+#endif
 
     private var usesFakeLocalRecordingPreview: Bool {
 #if DEBUG
@@ -797,7 +1195,13 @@ struct CameraRecordingView: View {
     }
 
     private var retryButtonTitle: String {
-        if case .recoveryRequired = recordingViewModel.state {
+        if recordingViewModel.requiresManualReprepare
+            || {
+                if case .recoveryRequired = recordingViewModel.state {
+                    return true
+                }
+                return false
+            }() {
             return CameraRecordingStrings.prepareCameraAgain
         }
         return CameraRecordingStrings.retry

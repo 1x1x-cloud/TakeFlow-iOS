@@ -49,14 +49,86 @@ enum CameraRecordingStrings {
     static let fakePreview = "模拟器摄像头预览（自动化测试）"
 #endif
     static let savedToPhotos = "已保存到照片"
-    static let interrupted = "录制已中断，已保留可恢复片段"
+    static let interrupted = "录制已中断，正在安全完成当前片段"
     static let cameraInterrupted = "摄像头会话已中断"
     static let interruptionEnded =
         "中断已经结束。请重新准备摄像头后再继续拍摄。"
+    static let recoveryCommitFailed =
+        "中断片段未能完成安全提交，无法确认恢复文件状态。请重新准备摄像头后再继续。"
+    static let backgroundFinalizationDeferred =
+        "后台安全封口时间已结束，尚不能确认恢复片段。返回 App 后会再次检查；请重新准备摄像头后再继续。"
+    static let mediaServicesRestored =
+        "系统媒体服务已经恢复。请重新准备摄像头后再继续拍摄。"
     static let storageLow = "存储空间不足，无法安全开始录制"
     static let audioUnavailable = "音频输入不可用"
     static let recoveredRecordingFound =
-        "发现一段未完整完成的录制，已保留供后续检查。"
+        "发现中断录制片段，请逐项检查。"
+    static let recoverableCardTitle = "发现中断录制片段"
+    static let inspectRecoverable = "检查片段"
+    static let validatingRecoverable = "正在验证片段…"
+    static let recoverableWarning = "中断片段，可能不完整"
+    static let recoverableHasAudio = "检测到视频和音频轨道"
+    static let recoverableMissingAudio = "未检测到音频轨道"
+    static let retainRecoverable = "保留片段"
+    static let recoverableRetaining = "正在保留…"
+    static let recoverableRetained = "中断片段已保留"
+    static let recoverableRetainFailed = "无法保留片段，原文件仍在"
+    static let deleteRecoverable = "删除片段"
+    static let deleteRecoverableTitle = "确认删除中断片段？"
+    static let deleteRecoverableMessage =
+        "此操作只删除当前中断片段，不能撤销，不会影响稿件或其他录像。"
+    static let recoverableDeleting = "正在删除…"
+    static let recoverableDeleteFailed = "删除失败，片段仍保留在 App 内"
+    static let recoverableLater = "稍后处理"
+    static let recoverableUnavailable = "此中断片段无法播放"
+
+    static func recoverableReason(
+        _ reason: CaptureInterruptionReason
+    ) -> String {
+        switch reason {
+        case .applicationBackgrounded:
+            "原因：App 进入后台"
+        case .audioSessionInterrupted:
+            "原因：音频会话中断"
+        case .cameraUnavailable:
+            "原因：摄像头不可用"
+        case .audioDeviceInUseByAnotherClient:
+            "原因：麦克风被其他应用占用"
+        case .videoDeviceInUseByAnotherClient:
+            "原因：摄像头被其他应用占用"
+        case .videoDeviceNotAvailableWithMultipleForegroundApps:
+            "原因：多窗口限制"
+        case .videoDeviceNotAvailableDueToSystemPressure:
+            "原因：设备压力过高"
+        case .sensitiveContentMitigationActivated:
+            "原因：系统暂停摄像头"
+        case .mediaServicesLost:
+            "原因：媒体服务丢失"
+        case .mediaServicesReset:
+            "原因：媒体服务重置"
+        case .storageSpaceLow:
+            "原因：存储空间不足"
+        case .unknown:
+            "原因：录制异常结束"
+        }
+    }
+
+    static func recoverableValidationMessage(
+        _ failure: RecoverableMediaValidationFailure
+    ) -> String {
+        switch failure {
+        case .fileMissing:
+            "恢复文件已不存在"
+        case .containerUnrecognized:
+            "文件容器无法识别"
+        case .videoTrackMissing:
+            "文件中没有有效视频轨道"
+        case .durationInvalid:
+            "文件没有有效的可播放时长"
+        case .notPlayable:
+            "系统无法播放此文件"
+        }
+    }
 
     static func recordingCountdown(_ remaining: Int) -> String {
         "录制倒计时 \(remaining)"
@@ -67,14 +139,18 @@ enum CameraRecordingStrings {
         recordingWasActive: Bool
     ) -> String {
         let preservationSuffix = recordingWasActive
-            ? "，当前片段已安全停止。"
+            ? "，正在安全完成当前片段。"
             : "。"
         return switch reason {
         case .applicationBackgrounded:
-            "App 已进入后台，录制已停止。返回后请重新准备摄像头。"
+            recordingWasActive
+                ? "App 已进入后台，正在安全完成当前片段。返回后请重新准备摄像头。"
+                : "App 已进入后台。返回后请重新准备摄像头。"
         case .audioSessionInterrupted,
              .audioDeviceInUseByAnotherClient:
-            "麦克风暂时被系统或其他应用占用" + preservationSuffix
+            reason == .audioDeviceInUseByAnotherClient
+                ? "麦克风暂时被其他应用占用" + preservationSuffix
+                : "音频会话被系统中断" + preservationSuffix
         case .videoDeviceInUseByAnotherClient:
             "摄像头暂时被其他应用占用" + preservationSuffix
         case .videoDeviceNotAvailableWithMultipleForegroundApps:
@@ -83,15 +159,47 @@ enum CameraRecordingStrings {
             "设备压力过高，摄像头已暂停。请稍后重新准备。"
         case .sensitiveContentMitigationActivated:
             "系统已暂停摄像头画面，请处理系统提示后重新准备。"
+        case .mediaServicesLost:
+            "系统媒体服务已丢失，请等待系统恢复后重新准备摄像头。"
         case .mediaServicesReset:
-            "系统媒体服务已重置，请重新准备摄像头。"
+            "系统媒体服务不可用或已重置，请重新准备摄像头。"
         case .storageSpaceLow:
             storageLow
         case .cameraUnavailable, .unknown:
             recordingWasActive
-                ? "摄像头会话受到中断，当前片段已作为可恢复片段保留。"
+                ? "摄像头会话受到中断，正在安全完成当前片段。"
                 : "摄像头会话受到中断，请等待中断结束后重新准备。"
         }
+    }
+
+    static func recoveryRequiredMessage(
+        for reason: CaptureInterruptionReason
+    ) -> String {
+        let reasonText = switch reason {
+        case .mediaServicesLost:
+            "系统媒体服务曾丢失"
+        case .mediaServicesReset:
+            "系统媒体服务不可用或已重置"
+        case .videoDeviceNotAvailableDueToSystemPressure:
+            "设备压力过高"
+        case .sensitiveContentMitigationActivated:
+            "系统暂停了摄像头画面"
+        case .applicationBackgrounded:
+            "App 曾进入后台或锁屏"
+        case .videoDeviceInUseByAnotherClient:
+            "摄像头曾被其他应用占用"
+        case .videoDeviceNotAvailableWithMultipleForegroundApps:
+            "多窗口状态限制了摄像头"
+        case .audioDeviceInUseByAnotherClient:
+            "麦克风曾被其他应用占用"
+        case .audioSessionInterrupted:
+            "音频会话曾被系统中断"
+        case .storageSpaceLow:
+            "录制因存储空间不足停止"
+        case .cameraUnavailable, .unknown:
+            "摄像头会话受到系统中断"
+        }
+        return "\(reasonText)。请重新准备摄像头后再继续拍摄。"
     }
 
     static func audioInput(_ route: AudioInputRoute) -> String {
@@ -121,7 +229,19 @@ enum CaptureDiagnostics {
         isReconfiguring: Bool,
         interruptionReason: CaptureInterruptionReason? = nil,
         interruptionEnded: Bool? = nil,
-        rawInterruptionReason: Int? = nil
+        rawInterruptionReason: Int? = nil,
+        episodeID: UUID? = nil,
+        recordingID: UUID? = nil,
+        scenePhase: String? = nil,
+        audioDetails: AudioInterruptionDetails? = nil,
+        didFinishFile: Bool? = nil,
+        didCommitManifest: Bool? = nil,
+        requiresManualReprepare: Bool? = nil,
+        fileExists: Bool? = nil,
+        fileNonEmpty: Bool? = nil,
+        manifestStage: String? = nil,
+        backgroundTaskStage: String? = nil,
+        recoveredItemCount: Int? = nil
     ) {
 #if DEBUG
         let uptime = String(
@@ -134,6 +254,22 @@ enum CaptureDiagnostics {
         let reason = interruptionReason?.rawValue ?? "none"
         let ended = interruptionEnded.map { String($0) } ?? "unknown"
         let rawReason = rawInterruptionReason.map { String($0) } ?? "none"
+        let episodeToken = episodeID.map(shortToken(for:)) ?? "none"
+        let recordingToken = recordingID.map(shortToken(for:)) ?? "none"
+        let phase = scenePhase ?? "unknown"
+        let audioRawType = audioDetails?.rawType.map(String.init) ?? "none"
+        let audioRawReason = audioDetails?.rawReason.map(String.init) ?? "none"
+        let audioSuspended = audioDetails.map {
+            String($0.wasSuspended)
+        } ?? "unknown"
+        let fileFinished = didFinishFile.map(String.init) ?? "unknown"
+        let manifestCommitted = didCommitManifest.map(String.init) ?? "unknown"
+        let manualReprepare = requiresManualReprepare.map(String.init) ?? "unknown"
+        let exists = fileExists.map(String.init) ?? "unknown"
+        let nonEmpty = fileNonEmpty.map(String.init) ?? "unknown"
+        let manifest = manifestStage ?? "unknown"
+        let backgroundTask = backgroundTaskStage ?? "unknown"
+        let recoveryCount = recoveredItemCount.map(String.init) ?? "unknown"
         AppLogger.info(
             "capture_debug uptime=\(uptime) event=\(event) "
                 + "state=\(stateName) lifecycle=\(lifecycleGeneration) "
@@ -141,7 +277,18 @@ enum CaptureDiagnostics {
                 + "recording=\(isRecording) finalizing=\(isFinalizing) "
                 + "reconfiguring=\(isReconfiguring) "
                 + "interruption_reason=\(reason) "
-                + "interruption_ended=\(ended) raw_reason=\(rawReason)",
+                + "interruption_ended=\(ended) raw_reason=\(rawReason) "
+                + "episode=\(episodeToken) recording_id=\(recordingToken) "
+                + "scene=\(phase) audio_type=\(audioRawType) "
+                + "audio_reason=\(audioRawReason) "
+                + "audio_suspended=\(audioSuspended) "
+                + "file_finished=\(fileFinished) "
+                + "manifest_committed=\(manifestCommitted) "
+                + "manual_reprepare=\(manualReprepare) "
+                + "file_exists=\(exists) file_nonempty=\(nonEmpty) "
+                + "manifest_stage=\(manifest) "
+                + "background_task=\(backgroundTask) "
+                + "recovery_count=\(recoveryCount)",
             category: .recording
         )
 #endif

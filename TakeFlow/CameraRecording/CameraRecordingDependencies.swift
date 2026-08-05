@@ -1,13 +1,16 @@
 import Foundation
+import UIKit
 
 @MainActor
 struct CameraRecordingDependencies {
     let permissions: any PermissionAuthorizing
     let capture: any CaptureSessionServicing
     let files: any RecordingFileStoring
+    let recoverableMediaValidator: any RecoverableMediaValidating
     let storage: any StorageSpaceChecking
     let photos: any PhotoLibrarySaving
     let audio: any AudioSessionServicing
+    let backgroundTasks: any RecordingBackgroundTaskManaging
     let storagePolicy: RecordingStoragePolicy
     let countdownSeconds: Int
     let countdownStep: Duration
@@ -23,9 +26,12 @@ struct CameraRecordingDependencies {
             permissions: SystemPermissionService(),
             capture: AVFoundationCaptureService(),
             files: try RecordingFileStore.production(),
+            recoverableMediaValidator:
+                AVFoundationRecoverableMediaValidator(),
             storage: try SystemStorageSpaceService.production(),
             photos: SystemPhotoLibraryService(),
             audio: SystemAudioSessionService(),
+            backgroundTasks: ApplicationRecordingBackgroundTaskManager(),
             storagePolicy: .production,
             countdownSeconds: 3,
             countdownStep: .seconds(1),
@@ -38,9 +44,12 @@ struct CameraRecordingDependencies {
             permissions: SystemPermissionService(),
             capture: AVFoundationCaptureService(),
             files: try RecordingFileStore.production(),
+            recoverableMediaValidator:
+                AVFoundationRecoverableMediaValidator(),
             storage: try SystemStorageSpaceService.production(),
             photos: SystemPhotoLibraryService(),
             audio: SystemAudioSessionService(),
+            backgroundTasks: ApplicationRecordingBackgroundTaskManager(),
             storagePolicy: .production,
             countdownSeconds: 3,
             countdownStep: .seconds(1),
@@ -55,6 +64,9 @@ struct CameraRecordingDependencies {
         arguments: [String]
     ) throws -> CameraRecordingDependencies {
         let mode = FakeCaptureMode(arguments: arguments)
+        let skipsRecordingCountdown = arguments.contains(
+            "-ui-testing-capture-skip-countdown"
+        )
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(
                 "TakeFlow-Capture-UITest-\(ProcessInfo.processInfo.processIdentifier)",
@@ -64,19 +76,22 @@ struct CameraRecordingDependencies {
             permissions: FakePermissionService(mode: mode),
             capture: FakeCaptureSessionService(mode: mode),
             files: try RecordingFileStore(rootURL: directory),
+            recoverableMediaValidator: FakeRecoverableMediaValidator(),
             storage: FakeStorageSpaceService(
                 availableBytes:
                     mode == .lowStorage ? 100 * 1_024 * 1_024 : Int64.max
             ),
             photos: FakePhotoLibraryService(),
             audio: FakeAudioSessionService(),
+            backgroundTasks: ApplicationRecordingBackgroundTaskManager(),
             storagePolicy: RecordingStoragePolicy(
                 minimumStartBytes: 500 * 1_024 * 1_024,
                 safeStopBytes: 250 * 1_024 * 1_024,
                 checkInterval: .milliseconds(100)
             ),
-            countdownSeconds: 3,
-            countdownStep: .seconds(1),
+            countdownSeconds: skipsRecordingCountdown ? 1 : 3,
+            countdownStep:
+                skipsRecordingCountdown ? .zero : .seconds(1),
             preparationTimeout:
                 mode == .preparationTimesOutOnce
                 ? .milliseconds(250) : .seconds(12),
@@ -92,9 +107,12 @@ struct CameraRecordingDependencies {
             permissions: UnavailableCapturePermissionService(),
             capture: UnavailableCaptureSessionService(),
             files: UnavailableRecordingFileStore(),
+            recoverableMediaValidator:
+                UnavailableRecoverableMediaValidator(),
             storage: UnavailableStorageSpaceService(),
             photos: UnavailablePhotoLibraryService(),
             audio: UnavailableAudioSessionService(),
+            backgroundTasks: UnavailableRecordingBackgroundTaskManager(),
             storagePolicy: .production,
             countdownSeconds: 3,
             countdownStep: .seconds(1),
@@ -107,9 +125,12 @@ struct CameraRecordingDependencies {
             permissions: UnavailableCapturePermissionService(),
             capture: UnavailableCaptureSessionService(),
             files: UnavailableRecordingFileStore(),
+            recoverableMediaValidator:
+                UnavailableRecoverableMediaValidator(),
             storage: UnavailableStorageSpaceService(),
             photos: UnavailablePhotoLibraryService(),
             audio: UnavailableAudioSessionService(),
+            backgroundTasks: UnavailableRecordingBackgroundTaskManager(),
             storagePolicy: .production,
             countdownSeconds: 3,
             countdownStep: .seconds(1),
@@ -120,7 +141,69 @@ struct CameraRecordingDependencies {
     }
 }
 
+@MainActor
+private final class ApplicationRecordingBackgroundTaskManager:
+    RecordingBackgroundTaskManaging
+{
+    private var identifiers:
+        [RecordingBackgroundTaskToken: UIBackgroundTaskIdentifier] = [:]
+
+    func beginRecordingFinalization(
+        expirationHandler: @escaping @MainActor @Sendable () -> Void
+    ) -> RecordingBackgroundTaskToken? {
+        let token = RecordingBackgroundTaskToken()
+        let identifier = UIApplication.shared.beginBackgroundTask(
+            withName: "TakeFlowRecordingFinalization"
+        ) { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    expirationHandler()
+                    return
+                }
+                self.expire(token, expirationHandler: expirationHandler)
+            }
+        }
+        guard identifier != .invalid else {
+            return nil
+        }
+        identifiers[token] = identifier
+        return token
+    }
+
+    func endRecordingFinalization(_ token: RecordingBackgroundTaskToken) {
+        guard let identifier = identifiers.removeValue(forKey: token) else {
+            return
+        }
+        UIApplication.shared.endBackgroundTask(identifier)
+    }
+
+    private func expire(
+        _ token: RecordingBackgroundTaskToken,
+        expirationHandler: @MainActor @Sendable () -> Void
+    ) {
+        endRecordingFinalization(token)
+        expirationHandler()
+    }
+}
+
+@MainActor
+private final class UnavailableRecordingBackgroundTaskManager:
+    RecordingBackgroundTaskManaging
+{
+    func beginRecordingFinalization(
+        expirationHandler: @escaping @MainActor @Sendable () -> Void
+    ) -> RecordingBackgroundTaskToken? {
+        nil
+    }
+
+    func endRecordingFinalization(_ token: RecordingBackgroundTaskToken) {}
+}
+
 #if DEBUG
+protocol CaptureSessionUITestControlling: Sendable {
+    func triggerInterruptionAndEndForUITesting() async -> Bool
+}
+
 enum FakeCaptureMode: Equatable, Sendable {
     case allowed
     case cameraDenied
@@ -173,7 +256,10 @@ final class FakePermissionService: PermissionAuthorizing {
     }
 }
 
-actor FakeCaptureSessionService: CaptureSessionServicing {
+actor FakeCaptureSessionService:
+    CaptureSessionServicing,
+    CaptureSessionUITestControlling
+{
     private let mode: FakeCaptureMode
     private var continuations:
         [UUID: AsyncStream<CaptureSessionEvent>.Continuation] = [:]
@@ -354,7 +440,7 @@ actor FakeCaptureSessionService: CaptureSessionServicing {
             .duration(recordingID: recordingID, seconds: 0)
         )
 
-        if mode == .interrupted || mode == .interruptionEnds {
+        if mode == .interrupted {
             Task {
                 try? await Task.sleep(for: .seconds(3))
                 interruptForUITest(recordingID: recordingID)
@@ -435,6 +521,17 @@ actor FakeCaptureSessionService: CaptureSessionServicing {
         lockedRotationAngle
     }
 
+    func triggerInterruptionAndEndForUITesting() async -> Bool {
+        guard
+            mode == .interruptionEnds,
+            let activeRecording
+        else {
+            return false
+        }
+        interruptForUITest(recordingID: activeRecording.id)
+        return true
+    }
+
     private func interruptForUITest(recordingID: UUID) {
         guard let activeRecording, activeRecording.id == recordingID else {
             return
@@ -467,6 +564,16 @@ struct FakeStorageSpaceService: StorageSpaceChecking {
 
     func availableCapacityForImportantUsage() async throws -> Int64 {
         availableBytes
+    }
+}
+
+struct FakeRecoverableMediaValidator: RecoverableMediaValidating {
+    func validate(
+        _ recording: RecoverableRecording
+    ) async -> RecoverableMediaValidationResult {
+        .playable(
+            RecoverableMediaInfo(duration: 1, hasAudioTrack: true)
+        )
     }
 }
 
@@ -653,7 +760,41 @@ private struct UnavailableRecordingFileStore: RecordingFileStoring {
         []
     }
 
+    func recoverCommittedRecordings() async -> [RecoverableRecording] {
+        []
+    }
+
+    func retainRecoverableRecording(
+        _ recording: RecoverableRecording,
+        duration: TimeInterval
+    ) async throws -> CompletedRecording {
+        throw CaptureError.fileFinalizationFailed
+    }
+
+    func markRecoverableRecordingDamaged(
+        _ recording: RecoverableRecording
+    ) async throws -> RecoverableRecording {
+        throw CaptureError.fileFinalizationFailed
+    }
+
+    func deleteRecoverableRecording(
+        projectID: UUID,
+        recordingID: UUID
+    ) async throws {
+        throw CaptureError.fileFinalizationFailed
+    }
+
     func deleteProject(projectID: UUID) async throws {}
+}
+
+private struct UnavailableRecoverableMediaValidator:
+    RecoverableMediaValidating
+{
+    func validate(
+        _ recording: RecoverableRecording
+    ) async -> RecoverableMediaValidationResult {
+        .invalid(.fileMissing)
+    }
 }
 
 private struct UnavailableStorageSpaceService: StorageSpaceChecking {

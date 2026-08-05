@@ -63,11 +63,11 @@ extension CaptureError: LocalizedError {
         case .storageSpaceInsufficient:
             "存储空间不足，无法安全录制。"
         case .recordingFailed:
-            "录制未能正常完成，已保留可恢复的内容。"
+            "录制未能正常完成，请检查恢复片段状态。"
         case .filePreparationFailed:
             "无法准备安全的录制文件。"
         case .fileFinalizationFailed:
-            "录制文件未能完成整理，已保留原始内容供恢复。"
+            "录制文件未能完成整理，无法确认恢复状态；已有录像不受影响。"
         case .photoPermissionDenied:
             "没有“添加到照片”的权限，视频仍保留在 App 内并可分享。"
         case .photoSaveFailed:

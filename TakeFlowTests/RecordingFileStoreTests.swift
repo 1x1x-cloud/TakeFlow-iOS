@@ -158,6 +158,184 @@ final class RecordingFileStoreTests: XCTestCase {
         XCTAssertEqual(recovered.first?.reason, .unknown)
     }
 
+    func testForegroundCommittedScanDoesNotPublishOpenOrphan()
+        async throws
+    {
+        let fixture = try makeFixture()
+        let pending = try await fixture.store.createRecording(
+            scriptID: UUID(),
+            orientation: .portrait,
+            resolution: .fullHD1080p
+        )
+        try Data("open-orphan".utf8).write(to: pending.temporaryURL)
+        try await fixture.store.markRecordingStarted(pending)
+
+        let beforePromotion =
+            await fixture.store.recoverCommittedRecordings()
+        XCTAssertTrue(beforePromotion.isEmpty)
+
+        let startupRecovery = await fixture.store.recoverPendingRecordings()
+        XCTAssertEqual(startupRecovery.map(\.recordingID), [pending.recordingID])
+
+        let afterPromotion =
+            await fixture.store.recoverCommittedRecordings()
+        XCTAssertEqual(afterPromotion.map(\.recordingID), [pending.recordingID])
+    }
+
+    func testMultipleRecoverableRecordingsAreAllDiscovered() async throws {
+        let fixture = try makeFixture()
+        var expected: [UUID] = []
+        for reason in [
+            CaptureInterruptionReason.applicationBackgrounded,
+            .audioSessionInterrupted,
+            .mediaServicesReset
+        ] {
+            let pending = try await fixture.store.createRecording(
+                scriptID: UUID(),
+                orientation: .portrait,
+                resolution: .fullHD1080p
+            )
+            try Data("partial".utf8).write(to: pending.temporaryURL)
+            _ = try await fixture.store.preserveRecoverableRecording(
+                pending,
+                reason: reason
+            )
+            expected.append(pending.recordingID)
+        }
+
+        let recovered = await fixture.store.recoverPendingRecordings()
+
+        XCTAssertEqual(Set(recovered.map(\.recordingID)), Set(expected))
+    }
+
+    func testVersionOneRecoverableManifestRemainsDiscoverable()
+        async throws
+    {
+        let fixture = try makeFixture()
+        let pending = try await fixture.store.createRecording(
+            scriptID: UUID(),
+            orientation: .portrait,
+            resolution: .fullHD1080p
+        )
+        try Data("legacy-partial".utf8).write(to: pending.temporaryURL)
+        _ = try await fixture.store.preserveRecoverableRecording(
+            pending,
+            reason: .mediaServicesReset
+        )
+        let manifestURL = pending.temporaryURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("recording.json")
+        let manifestData = try Data(contentsOf: manifestURL)
+        var manifest = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: manifestData)
+                as? [String: Any]
+        )
+        manifest["schemaVersion"] = 1
+        let legacyData = try JSONSerialization.data(withJSONObject: manifest)
+        try legacyData.write(to: manifestURL, options: .atomic)
+
+        let recreated = try RecordingFileStore(rootURL: fixture.root)
+        let recovered = await recreated.recoverPendingRecordings()
+
+        XCTAssertEqual(recovered.map(\.recordingID), [pending.recordingID])
+        XCTAssertEqual(recovered.first?.reason, .mediaServicesReset)
+        XCTAssertEqual(recovered.first?.disposition, .pendingReview)
+    }
+
+    func testRetainingRecoverableMovesFileAndMarksInterruptedOrigin()
+        async throws
+    {
+        let fixture = try makeFixture()
+        let pending = try await fixture.store.createRecording(
+            scriptID: UUID(),
+            orientation: .portrait,
+            resolution: .fullHD1080p
+        )
+        let contents = Data("recoverable-video".utf8)
+        try contents.write(to: pending.temporaryURL)
+        let recoverable = try await fixture.store
+            .preserveRecoverableRecording(
+                pending,
+                reason: .applicationBackgrounded
+            )
+
+        let retained = try await fixture.store.retainRecoverableRecording(
+            recoverable,
+            duration: 3.25
+        )
+
+        XCTAssertEqual(retained.origin, .interruptedRecovery)
+        XCTAssertEqual(retained.duration, 3.25)
+        XCTAssertEqual(retained.fileURL, pending.finalURL)
+        XCTAssertEqual(try Data(contentsOf: retained.fileURL), contents)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: pending.temporaryURL.path)
+        )
+        let remaining = await fixture.store.recoverPendingRecordings()
+        XCTAssertTrue(remaining.isEmpty)
+    }
+
+    func testRetainFailureKeepsOriginalRecoverableFile() async throws {
+        let fixture = try makeFixture()
+        let pending = try await fixture.store.createRecording(
+            scriptID: UUID(),
+            orientation: .portrait,
+            resolution: .fullHD1080p
+        )
+        try Data("source".utf8).write(to: pending.temporaryURL)
+        try Data("collision".utf8).write(to: pending.finalURL)
+        let recoverable = try await fixture.store
+            .preserveRecoverableRecording(
+                pending,
+                reason: .unknown
+            )
+
+        do {
+            _ = try await fixture.store.retainRecoverableRecording(
+                recoverable,
+                duration: 1
+            )
+            XCTFail("Expected retention to fail on an existing destination")
+        } catch {}
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: pending.temporaryURL.path)
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: pending.temporaryURL),
+            Data("source".utf8)
+        )
+        let remaining = await fixture.store.recoverPendingRecordings()
+        XCTAssertEqual(remaining.count, 1)
+    }
+
+    func testDamagedStatePersistsAndCanStillBeDeleted() async throws {
+        let fixture = try makeFixture()
+        let pending = try await fixture.store.createRecording(
+            scriptID: UUID(),
+            orientation: .portrait,
+            resolution: .fullHD1080p
+        )
+        try Data("damaged".utf8).write(to: pending.temporaryURL)
+        let recoverable = try await fixture.store
+            .preserveRecoverableRecording(pending, reason: .unknown)
+        _ = try await fixture.store.markRecoverableRecordingDamaged(
+            recoverable
+        )
+
+        let recreated = try RecordingFileStore(rootURL: fixture.root)
+        let recovered = await recreated.recoverPendingRecordings()
+        XCTAssertEqual(recovered.first?.disposition, .damaged)
+
+        try await recreated.deleteRecoverableRecording(
+            projectID: pending.projectID,
+            recordingID: pending.recordingID
+        )
+        let remaining = await recreated.recoverPendingRecordings()
+        XCTAssertTrue(remaining.isEmpty)
+    }
+
     func testCorruptManifestDoesNotCrashRecovery() async throws {
         let fixture = try makeFixture()
         let corruptDirectory = fixture.root.appendingPathComponent(

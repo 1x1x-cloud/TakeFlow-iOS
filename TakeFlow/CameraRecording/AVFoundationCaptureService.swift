@@ -23,6 +23,7 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
         let recordingID: UUID
         let sessionID: UUID
         let sessionGeneration: UInt64
+        let cameraPosition: CameraPosition
         var didStart = false
     }
     private var activeRecordings: [URL: ActiveRecordingContext] = [:]
@@ -33,6 +34,8 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
     private var notificationTokens: [NSObjectProtocol] = []
     private var shouldStopSessionAfterRecording = false
     private var interruptionWasIssued = false
+    private var observedInterruptionReasons:
+        Set<CaptureInterruptionReason> = []
     private var lastInterruptionReason: CaptureInterruptionReason?
 
     private struct NotificationContext: Sendable {
@@ -100,6 +103,7 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
                 self.activeSessionID = sessionID
                 self.activeSessionGeneration &+= 1
                 self.interruptionWasIssued = false
+                self.observedInterruptionReasons.removeAll()
                 self.lastInterruptionReason = nil
                 self.installNotifications(
                     for: NotificationContext(
@@ -278,9 +282,11 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
             self.activeRecordings[standardizedURL] = ActiveRecordingContext(
                 recordingID: recordingID,
                 sessionID: sessionID,
-                sessionGeneration: self.activeSessionGeneration
+                sessionGeneration: self.activeSessionGeneration,
+                cameraPosition: configuration.position
             )
             self.interruptionWasIssued = false
+            self.observedInterruptionReasons.removeAll()
             self.shouldStopSessionAfterRecording = false
             self.stoppingRecordingID = nil
             self.movieOutput.startRecording(
@@ -821,9 +827,8 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
                 let nsError = notification.userInfo?[
                     AVCaptureSessionErrorKey
                 ] as? NSError
-                let isMediaServicesReset =
-                    nsError?.code
-                    == AVError.Code.mediaServicesWereReset.rawValue
+                let isMediaServicesReset = Self
+                    .isMediaServicesResetRuntimeError(nsError)
                 guard let captureService = self else {
                     return
                 }
@@ -873,11 +878,15 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
             )
             return
         }
-        guard !interruptionWasIssued else {
+        let inserted = observedInterruptionReasons.insert(reason).inserted
+        guard inserted else {
             return
         }
+        let isFirstInterruptionSource = !interruptionWasIssued
         interruptionWasIssued = true
-        lastInterruptionReason = reason
+        if isFirstInterruptionSource {
+            lastInterruptionReason = reason
+        }
         recordDiagnostic(
             "capture_interruption_began",
             interruptionReason: reason,
@@ -895,6 +904,9 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
                     outputURL: outputURL
                 )
             )
+            guard isFirstInterruptionSource else {
+                return
+            }
             shouldStopSessionAfterRecording = true
             requestStopLocked(recordingID: recordingID)
         } else {
@@ -905,6 +917,9 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
                     outputURL: nil
                 )
             )
+            guard isFirstInterruptionSource else {
+                return
+            }
             if session.isRunning {
                 session.stopRunning()
             }
@@ -922,6 +937,7 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
         }
         let reason = lastInterruptionReason
         interruptionWasIssued = false
+        observedInterruptionReasons.removeAll()
         recordDiagnostic(
             "capture_interruption_ended",
             interruptionReason: reason,
@@ -975,6 +991,17 @@ final class AVFoundationCaptureService: NSObject, CaptureSessionServicing,
         default:
             .unknown
         }
+    }
+
+    static func isMediaServicesResetRuntimeError(
+        _ error: NSError?
+    ) -> Bool {
+        guard error?.domain == AVFoundationErrorDomain,
+              let rawCode = error?.code
+        else {
+            return false
+        }
+        return AVError.Code(rawValue: rawCode) == .mediaServicesWereReset
     }
 
     private func yieldToActiveSession(_ event: CaptureSessionEvent) {
@@ -1116,6 +1143,25 @@ extension AVFoundationCaptureService: AVCaptureFileOutputRecordingDelegate {
             }
             let recordingID = recordingContext.recordingID
             let duration = CMTimeGetSeconds(output.recordedDuration)
+            #if DEBUG
+            let attributes = try? FileManager.default.attributesOfItem(
+                atPath: standardizedURL.path
+            )
+            let fileSize = (attributes?[.size] as? NSNumber)?.int64Value
+            CaptureDiagnostics.record(
+                "recording_did_finish_received",
+                lifecycleGeneration: recordingContext.sessionGeneration,
+                sessionID: recordingContext.sessionID,
+                cameraPosition: recordingContext.cameraPosition,
+                isRecording: false,
+                isFinalizing: true,
+                isReconfiguring: false,
+                recordingID: recordingID,
+                didFinishFile: true,
+                fileExists: attributes != nil,
+                fileNonEmpty: fileSize.map { $0 > 0 }
+            )
+            #endif
             self.stopDurationTimer(recordingID: recordingID)
             self.elapsedTimekeeper.reset()
             self.activeRecordingID = nil

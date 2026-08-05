@@ -4,6 +4,43 @@ import XCTest
 
 @MainActor
 final class LocalRecordingPlayerControllerTests: XCTestCase {
+    func testRecoverablePreviewRefreshKeepsSinglePlayerSession() {
+        let factory = TestLocalRecordingPlayerFactory()
+        let controller = LocalRecordingPlayerController(factory: factory)
+        let recordingID = UUID()
+        let url = URL(fileURLWithPath: "/tmp/recoverable.recording.mov")
+
+        controller.open(recordingID: recordingID, fileURL: url)
+        controller.open(recordingID: recordingID, fileURL: url)
+        controller.open(recordingID: recordingID, fileURL: url)
+
+        XCTAssertEqual(factory.sessions.count, 1)
+        XCTAssertEqual(factory.activeSessionCount, 1)
+        XCTAssertEqual(factory.maximumActiveSessionCount, 1)
+    }
+
+    func testRecoverableMoveReleasesTemporaryPlayerBeforeFinalPlayer() {
+        let factory = TestLocalRecordingPlayerFactory()
+        let controller = LocalRecordingPlayerController(factory: factory)
+        let recordingID = UUID()
+        controller.open(
+            recordingID: recordingID,
+            fileURL: URL(fileURLWithPath: "/tmp/item.recording.mov")
+        )
+        let temporarySession = factory.sessions[0]
+
+        controller.close()
+        controller.open(
+            recordingID: recordingID,
+            fileURL: URL(fileURLWithPath: "/tmp/item.mov")
+        )
+
+        XCTAssertTrue(temporarySession.isReleased)
+        XCTAssertFalse(temporarySession.hasCurrentMedia)
+        XCTAssertEqual(factory.activeSessionCount, 1)
+        XCTAssertEqual(factory.maximumActiveSessionCount, 1)
+    }
+
     func testSameRecordingRefreshKeepsSinglePlayerSession() {
         let factory = TestLocalRecordingPlayerFactory()
         let controller = LocalRecordingPlayerController(factory: factory)
