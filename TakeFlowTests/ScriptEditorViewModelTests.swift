@@ -4,6 +4,32 @@ import XCTest
 
 @MainActor
 final class ScriptEditorViewModelTests: XCTestCase {
+    func testLibraryDeleteFailureKeepsScriptAndPublishesReadableError()
+        async throws
+    {
+        let repository = TestScriptRepository()
+        let service = ScriptLibraryService(
+            repository: repository,
+            recoveryStore: TestScriptRecoveryDraftStore()
+        )
+        let script = try await service.createBlankScript()
+        let viewModel = ScriptLibraryViewModel(service: service)
+        await viewModel.load()
+        viewModel.requestDelete(script)
+        await repository.setShouldFail(true)
+
+        await viewModel.confirmDelete()
+
+        XCTAssertEqual(viewModel.scripts.map(\.id), [script.id])
+        XCTAssertNil(viewModel.pendingDeletion)
+        XCTAssertNil(viewModel.requestedDeletion)
+        XCTAssertFalse(viewModel.isDeleteConfirmationPresented)
+        XCTAssertEqual(
+            viewModel.errorMessage,
+            AppError.persistenceUnavailable.errorDescription
+        )
+    }
+
     func testAutosaveDebouncesRapidChanges() async throws {
         let repository = TestScriptRepository()
         let service = ScriptLibraryService(

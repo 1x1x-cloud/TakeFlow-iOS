@@ -5,11 +5,13 @@ struct CameraRecordingView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @StateObject private var recordingViewModel: CameraRecordingViewModel
     @StateObject private var teleprompterViewModel: TeleprompterViewModel
     @StateObject private var localRecordingPlayer:
         LocalRecordingPlayerController
     @State private var showsLocalPreview = false
+    @State private var showsAudioRouteDetails = false
     @State private var selectedRecoverableRecordingID: UUID?
     @State private var isClosing = false
     @State private var focusRequest: CaptureFocusRequest?
@@ -94,16 +96,14 @@ struct CameraRecordingView: View {
 
                     VStack(spacing: cameraOverlaySpacing) {
                         topControls
-                            .layoutPriority(4)
-                        Spacer()
-                        statusOverlay
-                            .layoutPriority(0)
-                        if shouldShowRecoveryActionPanel {
-                            recoveryActionPanel
-                                .layoutPriority(3)
-                        }
+                            .fixedSize(horizontal: false, vertical: true)
+                            .layoutPriority(3)
+                        middleOverlayRegion
+                            .frame(maxHeight: .infinity)
+                            .layoutPriority(1)
                         bottomControls
-                            .layoutPriority(4)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .layoutPriority(3)
                     }
                     .padding(cameraOverlayPadding)
                 }
@@ -174,6 +174,14 @@ struct CameraRecordingView: View {
             }
         ) {
             localPreview
+        }
+        .sheet(isPresented: $showsAudioRouteDetails) {
+            AudioRouteDetailsView(
+                route: recordingViewModel.audioRoute,
+                onClose: {
+                    showsAudioRouteDetails = false
+                }
+            )
         }
         .sheet(
             isPresented: recoverableReviewPresented,
@@ -315,12 +323,14 @@ struct CameraRecordingView: View {
 
             Spacer()
 
-            Text(recordingStateDescription)
-                .font(.headline)
-                .multilineTextAlignment(.center)
-                .accessibilityIdentifier("capture.state")
+            if !usesAccessibilityControlLayout {
+                Text(recordingStateDescription)
+                    .font(.headline)
+                    .multilineTextAlignment(.center)
+                    .accessibilityIdentifier("capture.state")
 
-            Spacer()
+                Spacer()
+            }
 
             if !recordingViewModel.capabilities.availableFormats.isEmpty {
                 Menu {
@@ -338,17 +348,30 @@ struct CameraRecordingView: View {
                         )
                     }
                 } label: {
-                    Text(
-                        qualityTitle(
-                            recordingViewModel.selectedResolution
+                    if usesAccessibilityControlLayout {
+                        Image(systemName: "rectangle.inset.filled.and.camera")
+                            .frame(minWidth: 44, minHeight: 44)
+                    } else {
+                        Text(
+                            qualityTitle(
+                                recordingViewModel.selectedResolution
+                            )
                         )
-                    )
-                    .font(.caption.bold())
-                    .frame(minHeight: 44)
+                        .font(.caption.bold())
+                        .frame(minHeight: 44)
+                    }
                 }
                 .disabled(recordingViewModel.state != .ready)
                 .accessibilityLabel(CameraRecordingStrings.quality)
+                .accessibilityValue(
+                    qualityTitle(recordingViewModel.selectedResolution)
+                )
                 .accessibilityIdentifier("capture.quality")
+            }
+
+            if recordingViewModel.state == .ready
+                || recordingViewModel.state.isActivelyRecording {
+                audioRouteButton
             }
 
             Button {
@@ -371,8 +394,68 @@ struct CameraRecordingView: View {
         .background(.ultraThinMaterial, in: Capsule())
     }
 
+    private var audioRouteButton: some View {
+        Button {
+            showsAudioRouteDetails = true
+        } label: {
+            Image(
+                systemName: recordingViewModel.audioRoute.isBluetooth
+                    ? "wave.3.right"
+                    : "mic.fill"
+            )
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .accessibilityLabel(CameraRecordingStrings.audioInputDevice)
+        .accessibilityValue(
+            CameraRecordingStrings.audioInput(recordingViewModel.audioRoute)
+        )
+        .accessibilityHint(
+            CameraRecordingStrings.audioInputAccessibilityHint
+        )
+        .accessibilityIdentifier("capture.audioRoute")
+    }
+
+    @ViewBuilder
+    private var middleOverlayRegion: some View {
+        if shouldShowRecoveryActionPanel {
+            VStack(spacing: usesCompactRecoveryLayout ? 4 : 8) {
+                statusRegion(maximumHeight: recoveryStatusMaximumHeight)
+                recoveryActionPanel
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+            }
+        } else {
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                statusRegion(maximumHeight: regularStatusMaximumHeight)
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    private func statusRegion(maximumHeight: CGFloat?) -> some View {
+        ScrollView(.vertical) {
+            statusOverlay
+                .padding(.horizontal, 4)
+        }
+        .scrollIndicators(.visible)
+        .frame(maxWidth: .infinity, maxHeight: maximumHeight)
+        .accessibilityIdentifier("capture.statusRegion")
+    }
+
     private var statusOverlay: some View {
         VStack(spacing: 8) {
+            if usesAccessibilityControlLayout {
+                Text(recordingStateDescription)
+                    .font(.headline)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.black.opacity(0.65), in: Capsule())
+                    .accessibilityIdentifier("capture.state")
+            }
+
             if case .starting(let remaining) = recordingViewModel.state {
                 Text("\(remaining)")
                     .font(
@@ -412,24 +495,6 @@ struct CameraRecordingView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
                 .background(.red.opacity(0.8), in: Capsule())
-            }
-
-            if recordingViewModel.state == .ready
-                || recordingViewModel.state.isActivelyRecording {
-                Label(
-                    CameraRecordingStrings.audioInput(
-                        recordingViewModel.audioRoute
-                    ),
-                    systemImage: recordingViewModel.audioRoute.isBluetooth
-                        ? "wave.3.right"
-                        : "mic.fill"
-                )
-                .font(.caption)
-                .foregroundStyle(.white)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(.black.opacity(0.65), in: Capsule())
-                .accessibilityIdentifier("capture.audioRoute")
             }
 
             if !shouldShowRecoveryActionPanel,
@@ -497,6 +562,32 @@ struct CameraRecordingView: View {
         verticalSizeClass == .compact
     }
 
+    private var usesAccessibilityControlLayout: Bool {
+        dynamicTypeSize.isAccessibilitySize
+    }
+
+    private var recoveryStatusMaximumHeight: CGFloat {
+        usesCompactRecoveryLayout ? 52 : 88
+    }
+
+    private var regularStatusMaximumHeight: CGFloat {
+        if usesCompactRecoveryLayout {
+            return usesAccessibilityControlLayout ? 110 : 96
+        }
+        return usesAccessibilityControlLayout ? 180 : 150
+    }
+
+    private var recoveryMessageMaximumHeight: CGFloat {
+        usesCompactRecoveryLayout ? 48 : 76
+    }
+
+    private var recoveryCardListHeight: CGFloat {
+        if usesCompactRecoveryLayout {
+            return usesAccessibilityControlLayout ? 96 : 112
+        }
+        return usesAccessibilityControlLayout ? 132 : 156
+    }
+
     private var cameraOverlaySpacing: CGFloat {
         usesCompactRecoveryLayout ? 6 : 12
     }
@@ -506,34 +597,31 @@ struct CameraRecordingView: View {
     }
 
     private var recoveryActionPanel: some View {
-        Group {
+        VStack(spacing: usesCompactRecoveryLayout ? 4 : 8) {
+            recoveryMessages
+
             if usesCompactRecoveryLayout {
-                VStack(spacing: 6) {
-                    HStack(alignment: .center, spacing: 10) {
-                        if !recordingViewModel
-                            .recoverableReviewItems.isEmpty {
-                            recoverableRecordingCards
-                                .layoutPriority(2)
-                        }
-                        manualReprepareButton
-                            .fixedSize(horizontal: true, vertical: false)
-                    }
-                    recoveryMessages(compact: true)
-                }
-            } else {
-                VStack(spacing: 8) {
-                    recoveryMessages(compact: false)
+                HStack(alignment: .center, spacing: 8) {
                     if !recordingViewModel
                         .recoverableReviewItems.isEmpty {
                         recoverableRecordingCards
+                            .layoutPriority(2)
                     }
                     manualReprepareButton
+                        .fixedSize(horizontal: true, vertical: false)
+                        .layoutPriority(3)
                 }
+            } else {
+                if !recordingViewModel
+                    .recoverableReviewItems.isEmpty {
+                    recoverableRecordingCards
+                }
+                manualReprepareButton
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(8)
         .frame(maxWidth: .infinity)
-        .fixedSize(horizontal: false, vertical: true)
         .background(
             .black.opacity(0.42),
             in: RoundedRectangle(cornerRadius: 16)
@@ -542,34 +630,38 @@ struct CameraRecordingView: View {
         .accessibilityIdentifier("capture.recoveryActionPanel")
     }
 
-    @ViewBuilder
-    private func recoveryMessages(compact: Bool) -> some View {
-        if let notice = recordingViewModel.interruptionNoticeMessage {
-            recoveryNoticeText(
-                notice,
-                identifier: "capture.interruptionNotice",
-                compact: compact
-            )
+    private var recoveryMessages: some View {
+        ScrollView(.vertical) {
+            VStack(spacing: 4) {
+                if let notice = recordingViewModel.interruptionNoticeMessage {
+                    recoveryNoticeText(
+                        notice,
+                        identifier: "capture.interruptionNotice"
+                    )
+                }
+                if let notice = recordingViewModel.noticeMessage {
+                    recoveryNoticeText(
+                        notice,
+                        identifier: "capture.notice"
+                    )
+                }
+            }
         }
-        if let notice = recordingViewModel.noticeMessage {
-            recoveryNoticeText(
-                notice,
-                identifier: "capture.notice",
-                compact: compact
-            )
-        }
+        .scrollIndicators(.visible)
+        .frame(maxWidth: .infinity)
+        .frame(maxHeight: recoveryMessageMaximumHeight)
+        .accessibilityIdentifier("capture.recoveryMessages")
     }
 
     private func recoveryNoticeText(
         _ notice: String,
-        identifier: String,
-        compact: Bool = false
+        identifier: String
     ) -> some View {
         Text(notice)
             .font(.subheadline)
             .foregroundStyle(.white)
             .multilineTextAlignment(.center)
-            .lineLimit(compact ? 1 : 3)
+            .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity)
             .accessibilityIdentifier(identifier)
     }
@@ -577,57 +669,83 @@ struct CameraRecordingView: View {
     @ViewBuilder
     private var manualReprepareButton: some View {
         if recordingViewModel.shouldShowManualReprepare {
-            Button(retryButtonTitle) {
+            Button {
                 Task {
                     await recordingViewModel.retryPreparation()
                 }
+            } label: {
+                if usesAccessibilityControlLayout {
+                    Image(systemName: "arrow.clockwise")
+                        .frame(minWidth: 44, minHeight: 44)
+                } else {
+                    Label(retryButtonTitle, systemImage: "arrow.clockwise")
+                        .frame(minHeight: 44)
+                }
             }
             .buttonStyle(.borderedProminent)
-            .frame(minHeight: 44)
             .disabled(!recordingViewModel.canRetryPreparation)
+            .accessibilityLabel(retryButtonTitle)
             .accessibilityIdentifier("capture.retry")
         }
     }
 
     private var bottomControls: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 12) {
-                teleprompterButton
-                recordingButton
-                focusLockButton
-                previewButton
-            }
-            VStack(spacing: 10) {
-                HStack(spacing: 12) {
+        Group {
+            if usesAccessibilityControlLayout {
+                HStack(spacing: 8) {
                     teleprompterButton
                     recordingButton
-                }
-                HStack(spacing: 12) {
                     focusLockButton
                     previewButton
                 }
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) {
+                        teleprompterButton
+                        recordingButton
+                        focusLockButton
+                        previewButton
+                    }
+                    VStack(spacing: 10) {
+                        HStack(spacing: 12) {
+                            teleprompterButton
+                            recordingButton
+                        }
+                        HStack(spacing: 12) {
+                            focusLockButton
+                            previewButton
+                        }
+                    }
+                }
             }
         }
-        .padding(10)
+        .padding(usesAccessibilityControlLayout ? 6 : 10)
         .frame(maxWidth: .infinity)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(CameraRecordingStrings.controls)
+        .accessibilityIdentifier("capture.controls")
     }
 
     private var teleprompterButton: some View {
         Button {
             teleprompterViewModel.primaryAction()
         } label: {
-            Label(
-                teleprompterButtonTitle,
-                systemImage: teleprompterButtonIcon
-            )
-            .frame(minWidth: 82, minHeight: 44)
+            if usesAccessibilityControlLayout {
+                Image(systemName: teleprompterButtonIcon)
+                    .frame(minWidth: 44, minHeight: 44)
+            } else {
+                Label(
+                    teleprompterButtonTitle,
+                    systemImage: teleprompterButtonIcon
+                )
+                .frame(minWidth: 82, minHeight: 44)
+            }
         }
         .buttonStyle(.bordered)
         .tint(.white)
         .disabled(teleprompterViewModel.isEmpty)
+        .accessibilityLabel(teleprompterButtonTitle)
         .accessibilityIdentifier("capture.teleprompter.primary")
     }
 
@@ -646,12 +764,18 @@ struct CameraRecordingView: View {
                 break
             }
         } label: {
-            Label(recordButtonTitle, systemImage: recordButtonIcon)
-                .frame(minWidth: 92, minHeight: 44)
+            if usesAccessibilityControlLayout {
+                Image(systemName: recordButtonIcon)
+                    .frame(minWidth: 44, minHeight: 44)
+            } else {
+                Label(recordButtonTitle, systemImage: recordButtonIcon)
+                    .frame(minWidth: 92, minHeight: 44)
+            }
         }
         .buttonStyle(.borderedProminent)
         .tint(recordingViewModel.state.isActivelyRecording ? .red : .blue)
         .disabled(!isRecordButtonEnabled)
+        .accessibilityLabel(recordButtonTitle)
         .accessibilityIdentifier("capture.record")
     }
 
@@ -711,6 +835,7 @@ struct CameraRecordingView: View {
                 ForEach(recordingViewModel.recoverableReviewItems) { item in
                     recoverableRecordingCard(item)
                     .padding(10)
+                    .frame(maxHeight: .infinity)
                     .containerRelativeFrame(
                         .horizontal,
                         count: recoveryCardsPerViewport,
@@ -741,8 +866,8 @@ struct CameraRecordingView: View {
             .scrollTargetLayout()
         }
         .scrollTargetBehavior(.viewAligned)
-        .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity)
+        .frame(height: recoveryCardListHeight)
         .accessibilityIdentifier("capture.recoveryList")
     }
 
@@ -754,9 +879,13 @@ struct CameraRecordingView: View {
     private func recoverableRecordingCard(
         _ item: RecoverableRecordingReviewItem
     ) -> some View {
-        if usesCompactRecoveryLayout {
+        if usesCompactRecoveryLayout || usesAccessibilityControlLayout {
             HStack(alignment: .center, spacing: 8) {
-                recoverableRecordingDetails(item, compact: true)
+                ScrollView(.vertical) {
+                    recoverableRecordingDetails(item, compact: false)
+                }
+                .scrollIndicators(.visible)
+                .frame(maxHeight: .infinity)
                 Spacer(minLength: 4)
                 recoverableInspectButton(item)
             }
@@ -810,15 +939,28 @@ struct CameraRecordingView: View {
             inspectRecoverable(item.id)
         } label: {
             if item.state == .validating {
-                ProgressView(CameraRecordingStrings.validatingRecoverable)
+                if usesAccessibilityControlLayout {
+                    ProgressView()
+                        .frame(minWidth: 44, minHeight: 44)
+                } else {
+                    ProgressView(CameraRecordingStrings.validatingRecoverable)
+                }
+            } else if usesAccessibilityControlLayout {
+                Image(systemName: "magnifyingglass")
+                    .frame(minWidth: 44, minHeight: 44)
             } else {
                 Text(CameraRecordingStrings.inspectRecoverable)
+                    .frame(minHeight: 44)
             }
         }
         .buttonStyle(.borderedProminent)
-        .frame(minHeight: 44)
         .fixedSize(horizontal: true, vertical: false)
         .disabled(recoveryCardIsBusy(item.state))
+        .accessibilityLabel(
+            item.state == .validating
+                ? CameraRecordingStrings.validatingRecoverable
+                : CameraRecordingStrings.inspectRecoverable
+        )
         .accessibilityIdentifier(
             "capture.recoveryInspect.\(item.id.uuidString)"
         )
@@ -1213,6 +1355,49 @@ struct CameraRecordingView: View {
         resolution == .ultraHD4K
             ? CameraRecordingStrings.ultraHD
             : CameraRecordingStrings.fullHD
+    }
+}
+
+private struct AudioRouteDetailsView: View {
+    let route: AudioInputRoute
+    let onClose: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 16) {
+                    Label(
+                        CameraRecordingStrings.audioInput(route),
+                        systemImage: route.isBluetooth
+                            ? "wave.3.right"
+                            : "mic.fill"
+                    )
+                    .font(.title3.bold())
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("capture.audioRouteName")
+
+                    Text(CameraRecordingStrings.audioInputExplanation)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+            }
+            .scrollIndicators(.visible)
+            .navigationTitle(CameraRecordingStrings.audioInputDevice)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(CameraRecordingStrings.audioInputDetailsDone) {
+                        onClose()
+                    }
+                    .accessibilityIdentifier("capture.audioRouteDone")
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("capture.audioRouteDetails")
     }
 }
 

@@ -4,6 +4,7 @@ struct TeleprompterView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @StateObject private var viewModel: TeleprompterViewModel
     @State private var isSettingsPresented = false
 
@@ -149,7 +150,7 @@ struct TeleprompterView: View {
     }
 
     private var controls: some View {
-        VStack {
+        VStack(spacing: 0) {
             HStack {
                 Button {
                     dismiss()
@@ -162,13 +163,15 @@ struct TeleprompterView: View {
 
                 Spacer()
 
-                Text(viewModel.state.accessibilityDescription)
-                    .font(.headline)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-                    .accessibilityIdentifier("teleprompter.state")
+                if !usesAccessibilityControlLayout {
+                    Text(viewModel.state.accessibilityDescription)
+                        .font(.headline)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                        .accessibilityIdentifier("teleprompter.state")
 
-                Spacer()
+                    Spacer()
+                }
 
                 Button {
                     isSettingsPresented = true
@@ -182,16 +185,38 @@ struct TeleprompterView: View {
             .padding(.horizontal)
             .background(.ultraThinMaterial)
 
+            if usesAccessibilityControlLayout {
+                ScrollView(.vertical) {
+                    Text(viewModel.state.accessibilityDescription)
+                        .font(.headline)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, 8)
+                        .accessibilityIdentifier("teleprompter.state")
+                }
+                .frame(maxHeight: 72)
+                .background(.ultraThinMaterial)
+            }
+
             Spacer()
 
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 16) {
-                    primaryButton
-                    restartButton
-                }
-                VStack(spacing: 10) {
-                    primaryButton
-                    restartButton
+            Group {
+                if usesAccessibilityControlLayout {
+                    HStack(spacing: 16) {
+                        primaryButton
+                        restartButton
+                    }
+                } else {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 16) {
+                            primaryButton
+                            restartButton
+                        }
+                        VStack(spacing: 10) {
+                            primaryButton
+                            restartButton
+                        }
+                    }
                 }
             }
             .padding()
@@ -205,8 +230,13 @@ struct TeleprompterView: View {
         Button {
             viewModel.primaryAction()
         } label: {
-            Label(primaryButtonTitle, systemImage: primaryButtonIcon)
-                .frame(minWidth: 120, minHeight: 44)
+            if usesAccessibilityControlLayout {
+                Image(systemName: primaryButtonIcon)
+                    .frame(minWidth: 52, minHeight: 52)
+            } else {
+                Label(primaryButtonTitle, systemImage: primaryButtonIcon)
+                    .frame(minWidth: 120, minHeight: 44)
+            }
         }
         .buttonStyle(.borderedProminent)
         .accessibilityLabel(primaryButtonTitle)
@@ -219,11 +249,16 @@ struct TeleprompterView: View {
         Button {
             viewModel.restart()
         } label: {
-            Label(
-                TeleprompterStrings.restart,
-                systemImage: "backward.end.fill"
-            )
-            .frame(minWidth: 120, minHeight: 44)
+            if usesAccessibilityControlLayout {
+                Image(systemName: "backward.end.fill")
+                    .frame(minWidth: 52, minHeight: 52)
+            } else {
+                Label(
+                    TeleprompterStrings.restart,
+                    systemImage: "backward.end.fill"
+                )
+                .frame(minWidth: 120, minHeight: 44)
+            }
         }
         .buttonStyle(.bordered)
         .accessibilityLabel(TeleprompterStrings.restart)
@@ -438,6 +473,10 @@ struct TeleprompterView: View {
         default:
             return false
         }
+    }
+
+    private var usesAccessibilityControlLayout: Bool {
+        dynamicTypeSize.isAccessibilitySize
     }
 
     private var primaryButtonTitle: String {

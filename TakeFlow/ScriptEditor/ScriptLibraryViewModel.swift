@@ -5,6 +5,7 @@ final class ScriptLibraryViewModel: ObservableObject {
     @Published private(set) var scripts: [Script] = []
     @Published private(set) var isLoading = false
     @Published private(set) var isDeleteConfirmationPresented = false
+    @Published private(set) var requestedDeletion: Script?
     @Published private(set) var pendingDeletion: ScriptDeletion?
     @Published private(set) var errorMessage: String?
     @Published var searchText = "" {
@@ -14,7 +15,6 @@ final class ScriptLibraryViewModel: ObservableObject {
     }
 
     private let service: any ScriptLibraryServicing
-    private var requestedDeletionID: UUID?
     private var searchTask: Task<Void, Never>?
     private var finalizeDeletionTask: Task<Void, Never>?
 
@@ -53,24 +53,24 @@ final class ScriptLibraryViewModel: ObservableObject {
     }
 
     func requestDelete(_ script: Script) {
-        requestedDeletionID = script.id
+        requestedDeletion = script
         isDeleteConfirmationPresented = true
     }
 
     func cancelDelete() {
-        requestedDeletionID = nil
+        requestedDeletion = nil
         isDeleteConfirmationPresented = false
     }
 
     func dismissDeleteConfirmation() {
-        isDeleteConfirmationPresented = false
+        cancelDelete()
     }
 
     func confirmDelete() async {
-        guard let scriptID = requestedDeletionID else {
+        guard let scriptID = requestedDeletion?.id else {
             return
         }
-        requestedDeletionID = nil
+        requestedDeletion = nil
         isDeleteConfirmationPresented = false
 
         do {

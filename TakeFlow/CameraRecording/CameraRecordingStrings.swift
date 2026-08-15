@@ -61,6 +61,11 @@ enum CameraRecordingStrings {
         "系统媒体服务已经恢复。请重新准备摄像头后再继续拍摄。"
     static let storageLow = "存储空间不足，无法安全开始录制"
     static let audioUnavailable = "音频输入不可用"
+    static let audioInputDevice = "音频输入设备"
+    static let audioInputAccessibilityHint = "查看当前音频输入设备详情"
+    static let audioInputExplanation =
+        "录制将使用系统当前提供的音频输入。可在系统设置中管理可用的麦克风和蓝牙设备。"
+    static let audioInputDetailsDone = "完成"
     static let recoveredRecordingFound =
         "发现中断录制片段，请逐项检查。"
     static let recoverableCardTitle = "发现中断录制片段"

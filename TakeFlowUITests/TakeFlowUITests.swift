@@ -19,6 +19,116 @@ final class TakeFlowUITests: XCTestCase {
     }
 
     @MainActor
+    func testMaximumAccessibilityTextScriptEditorAndLibraryRemainReachable()
+        throws
+    {
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing"]
+            + maximumAccessibilityTextArguments
+        app.launch()
+
+        let addButton = app.buttons["script.empty.add"]
+        XCTAssertTrue(addButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(addButton.isHittable)
+        addButton.tap()
+
+        let editorScroll = app.descendants(matching: .any)[
+            "editor.scrollView"
+        ]
+        XCTAssertTrue(editorScroll.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textFields["editor.title"].isHittable)
+        XCTAssertTrue(app.textViews["editor.content"].isHittable)
+
+        let readPosition = app.descendants(matching: .any)[
+            "editor.readPosition"
+        ]
+        for _ in 0..<4 where !readPosition.isHittable {
+            editorScroll.swipeUp()
+        }
+        XCTAssertTrue(readPosition.exists)
+        XCTAssertTrue(readPosition.isHittable)
+
+        let back = app.navigationBars.buttons.element(boundBy: 0)
+        XCTAssertTrue(back.isHittable)
+        back.tap()
+
+        let scriptRow = app.descendants(matching: .any).matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@",
+                "script.row."
+            )
+        ).firstMatch
+        XCTAssertTrue(scriptRow.waitForExistence(timeout: 5))
+        XCTAssertTrue(scriptRow.isHittable)
+        XCTAssertTrue(teleprompterOpenButton(in: app).isHittable)
+        XCTAssertTrue(captureOpenButton(in: app).isHittable)
+        XCTAssertTrue(app.buttons["script.add"].isHittable)
+    }
+
+    @MainActor
+    func testMaximumAccessibilityTextDeleteCancellationKeepsTargetScript()
+        throws
+    {
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing"]
+            + maximumAccessibilityTextArguments
+        app.launch()
+        createBlankScriptAndReturnToLibrary(app: app)
+
+        let row = firstScriptRow(in: app)
+        let delete = firstScriptDeleteButton(in: app)
+        assertExistsAndHittable([row, delete])
+        XCTAssertGreaterThanOrEqual(delete.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(delete.frame.height, 44)
+
+        delete.tap()
+        let confirmation = app.descendants(matching: .any)[
+            "script.deleteConfirmation"
+        ]
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        let cancel = app.buttons["script.delete.cancel"]
+        let confirm = app.buttons["script.delete.confirm"]
+        assertExistsAndHittable([cancel, confirm])
+        XCTAssertEqual(cancel.label, "取消删除稿件")
+        XCTAssertEqual(confirm.label, "确认删除稿件")
+
+        cancel.tap()
+        XCTAssertTrue(confirmation.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testMaximumAccessibilityTextConfirmedDeleteStaysDeletedAfterRelaunch()
+        throws
+    {
+        let app = XCUIApplication()
+        let storeIdentifier = UUID().uuidString
+        app.launchArguments = [
+            "-ui-testing-persistent-store=\(storeIdentifier)"
+        ] + maximumAccessibilityTextArguments
+        app.launch()
+        createBlankScriptAndReturnToLibrary(app: app)
+
+        let row = firstScriptRow(in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        firstScriptDeleteButton(in: app).tap()
+        let confirm = app.buttons["script.delete.confirm"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        XCTAssertTrue(confirm.isHittable)
+        confirm.tap()
+
+        XCTAssertTrue(row.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["script.undo"].waitForExistence(timeout: 5))
+        app.terminate()
+        app.launch()
+
+        XCTAssertFalse(firstScriptRow(in: app).waitForExistence(timeout: 2))
+        XCTAssertTrue(
+            app.staticTexts["script.empty.title"].waitForExistence(timeout: 5)
+        )
+    }
+
+    @MainActor
     func testCreateEditAndAutosaveScript() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing"]
@@ -76,9 +186,13 @@ final class TakeFlowUITests: XCTestCase {
         XCTAssertTrue(deleteAction.waitForExistence(timeout: 5))
         deleteAction.tap()
 
-        let confirmation = app.sheets["删除这份稿件？"]
+        let confirmation = app.descendants(matching: .any)[
+            "script.deleteConfirmation"
+        ]
         XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
-        confirmation.buttons["删除"].tap()
+        let confirmDelete = app.buttons["script.delete.confirm"]
+        XCTAssertTrue(confirmDelete.isHittable)
+        confirmDelete.tap()
 
         let undoButton = app.buttons["script.undo"]
         XCTAssertTrue(undoButton.waitForExistence(timeout: 5))
@@ -167,6 +281,53 @@ final class TakeFlowUITests: XCTestCase {
         XCTAssertTrue(
             app.descendants(matching: .any)["teleprompter.state"].label
                 .contains("倒计时")
+        )
+    }
+
+    @MainActor
+    func testMaximumAccessibilityTextTeleprompterControlsSurviveRotation()
+        throws
+    {
+        let device = XCUIDevice.shared
+        device.orientation = .portrait
+        defer {
+            device.orientation = .portrait
+        }
+
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing"]
+            + maximumAccessibilityTextArguments
+        app.launch()
+        createScriptAndOpenTeleprompter(
+            app: app,
+            content: String(
+                repeating: "最大辅助字体提词器旋转测试。\n",
+                count: 30
+            )
+        )
+
+        let close = app.buttons["teleprompter.close"]
+        let settings = app.buttons["teleprompter.settings"]
+        let primary = app.buttons["teleprompter.primary"]
+        let restart = app.buttons["teleprompter.restart"]
+        assertExistsAndHittable([close, settings, primary, restart])
+
+        primary.tap()
+        waitForTeleprompterState(app, containing: "正在滚动", timeout: 6)
+        XCTAssertEqual(primary.label, "暂停")
+        XCTAssertTrue(primary.isHittable)
+        primary.tap()
+        waitForTeleprompterState(app, containing: "已暂停", timeout: 2)
+
+        device.orientation = .landscapeLeft
+        assertExistsAndHittable([close, settings, primary, restart])
+
+        device.orientation = .portrait
+        assertExistsAndHittable([close, settings, primary, restart])
+        close.tap()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["teleprompter.screen"]
+                .waitForNonExistence(timeout: 5)
         )
     }
 
@@ -335,6 +496,114 @@ final class TakeFlowUITests: XCTestCase {
             app.buttons["保存到照片"].waitForExistence(timeout: 3)
         )
         XCTAssertTrue(app.buttons["分享视频"].exists)
+    }
+
+    @MainActor
+    func testMaximumAccessibilityTextCaptureControlsPreviewAndExitSurviveRotation()
+        throws
+    {
+        let device = XCUIDevice.shared
+        device.orientation = .portrait
+        defer {
+            device.orientation = .portrait
+        }
+
+        let app = launchCaptureApp(
+            extraArguments: ["-ui-testing-capture-skip-countdown"]
+                + maximumAccessibilityTextArguments
+        )
+        createScriptAndOpenCapture(
+            app: app,
+            content: String(
+                repeating: "最大辅助字体摄像提词布局测试。\n",
+                count: 80
+            )
+        )
+        waitForCaptureState(app, containing: "预览已就绪", timeout: 5)
+
+        let close = app.buttons["capture.close"]
+        let audioRoute = app.buttons["capture.audioRoute"]
+        let promptPrimary = app.buttons["capture.teleprompter.primary"]
+        let record = app.buttons["capture.record"]
+        let preview = app.buttons["capture.localPreview"]
+        assertExistsAndHittable([close, audioRoute, promptPrimary, record])
+        XCTAssertTrue(preview.exists)
+        XCTAssertEqual(audioRoute.label, "音频输入设备")
+        XCTAssertTrue(
+            (audioRoute.value as? String)?.contains("UI 测试麦克风") == true
+        )
+        assertAudioRouteControlUsesTopRegion(audioRoute, in: app)
+
+        audioRoute.tap()
+        let audioDetails = app.descendants(matching: .any)[
+            "capture.audioRouteDetails"
+        ]
+        XCTAssertTrue(audioDetails.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            app.staticTexts["capture.audioRouteName"].label
+                .contains("UI 测试麦克风")
+        )
+        let audioDone = app.buttons["capture.audioRouteDone"]
+        XCTAssertTrue(audioDone.isHittable)
+        audioDone.tap()
+        XCTAssertTrue(audioDetails.waitForNonExistence(timeout: 3))
+
+        promptPrimary.tap()
+        waitForCaptureTeleprompterButton(
+            promptPrimary,
+            label: "暂停",
+            timeout: 6
+        )
+        XCTAssertTrue(promptPrimary.isHittable)
+        promptPrimary.tap()
+        waitForCaptureTeleprompterButton(
+            promptPrimary,
+            label: "继续",
+            timeout: 2
+        )
+
+        record.tap()
+        waitForCaptureState(app, containing: "正在录制", timeout: 6)
+        XCTAssertEqual(record.label, "停止录制")
+        XCTAssertTrue(record.isHittable)
+        record.tap()
+        waitForCaptureState(app, containing: "录制已完成", timeout: 3)
+        XCTAssertTrue(preview.isHittable)
+
+        preview.tap()
+        let previewScreen = app.descendants(matching: .any)[
+            "capture.previewScreen"
+        ]
+        XCTAssertTrue(previewScreen.waitForExistence(timeout: 3))
+        let previewClose = app.buttons["capture.previewClose"]
+        XCTAssertTrue(previewClose.isHittable)
+        previewClose.tap()
+        XCTAssertTrue(previewScreen.waitForNonExistence(timeout: 3))
+        let activePlayerCount = app.descendants(matching: .any)[
+            "capture.debugActivePlayerCount"
+        ]
+        expectation(
+            for: NSPredicate(format: "label == %@", "活动播放器 0"),
+            evaluatedWith: activePlayerCount
+        )
+        waitForExpectations(timeout: 2)
+
+        device.orientation = .landscapeLeft
+        assertExistsAndHittable(
+            [close, audioRoute, promptPrimary, record, preview]
+        )
+        assertAudioRouteControlUsesTopRegion(audioRoute, in: app)
+
+        device.orientation = .portrait
+        assertExistsAndHittable(
+            [close, audioRoute, promptPrimary, record, preview]
+        )
+        assertAudioRouteControlUsesTopRegion(audioRoute, in: app)
+        close.tap()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["capture.screen"]
+                .waitForNonExistence(timeout: 5)
+        )
     }
 
     @MainActor
@@ -655,6 +924,14 @@ final class TakeFlowUITests: XCTestCase {
         let retry = app.buttons["capture.retry"]
         XCTAssertTrue(retry.waitForExistence(timeout: 3))
         XCTAssertTrue(retry.isHittable)
+        let firstInspect = app.buttons.matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@",
+                "capture.recoveryInspect."
+            )
+        ).firstMatch
+        XCTAssertTrue(firstInspect.waitForExistence(timeout: 3))
+        XCTAssertTrue(firstInspect.isHittable)
         retry.tap()
         waitForCaptureState(app, containing: "预览已就绪", timeout: 6)
 
@@ -701,6 +978,24 @@ final class TakeFlowUITests: XCTestCase {
         XCTAssertTrue(recoveryCards.element(boundBy: 1).exists)
         XCTAssertTrue(recoveryCards.element(boundBy: 1).isHittable)
         XCTAssertTrue(inspectButtons.element(boundBy: 1).isHittable)
+        XCTAssertTrue(retry.isHittable)
+
+        device.orientation = .portrait
+        recoveryList.swipeRight()
+        XCTAssertTrue(recoveryCards.element(boundBy: 0).isHittable)
+        XCTAssertTrue(inspectButtons.element(boundBy: 0).isHittable)
+        XCTAssertTrue(retry.isHittable)
+
+        inspectButtons.element(boundBy: 0).tap()
+        let reviewSheet = app.descendants(matching: .any)[
+            "capture.recoveryReviewSheet"
+        ]
+        XCTAssertTrue(reviewSheet.waitForExistence(timeout: 5))
+        let later = app.buttons["capture.recoveryLater"]
+        XCTAssertTrue(later.waitForExistence(timeout: 5))
+        later.tap()
+        XCTAssertTrue(reviewSheet.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(retry.waitForExistence(timeout: 3))
         XCTAssertTrue(retry.isHittable)
     }
 
@@ -999,9 +1294,8 @@ final class TakeFlowUITests: XCTestCase {
         XCTAssertTrue(text.waitForExistence(timeout: 3))
         text.swipeUp()
         primary.tap()
-        waitForCaptureTeleprompterButton(
+        waitForCaptureTeleprompterToResumeOrFinish(
             primary,
-            label: "暂停",
             timeout: 2
         )
     }
@@ -1241,6 +1535,82 @@ final class TakeFlowUITests: XCTestCase {
     }
 
     @MainActor
+    private func createBlankScriptAndReturnToLibrary(
+        app: XCUIApplication
+    ) {
+        let add = app.buttons["script.empty.add"]
+        XCTAssertTrue(add.waitForExistence(timeout: 5))
+        add.tap()
+        XCTAssertTrue(
+            app.textFields["editor.title"].waitForExistence(timeout: 5)
+        )
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(firstScriptRow(in: app).waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    private func firstScriptRow(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@",
+                "script.row."
+            )
+        ).firstMatch
+    }
+
+    @MainActor
+    private func firstScriptDeleteButton(
+        in app: XCUIApplication
+    ) -> XCUIElement {
+        app.buttons.matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@",
+                "script.delete."
+            )
+        ).firstMatch
+    }
+
+    @MainActor
+    private func assertAudioRouteControlUsesTopRegion(
+        _ audioRoute: XCUIElement,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let screen = app.descendants(matching: .any)["capture.screen"]
+        let record = app.buttons["capture.record"]
+        let preview = app.buttons["capture.localPreview"]
+        XCTAssertTrue(screen.exists, file: file, line: line)
+        XCTAssertLessThan(
+            audioRoute.frame.midY,
+            screen.frame.midY,
+            "音频设备入口必须位于画面上半部的配置区",
+            file: file,
+            line: line
+        )
+        XCTAssertFalse(
+            audioRoute.frame.intersects(record.frame),
+            "音频设备入口不得遮挡录制按钮",
+            file: file,
+            line: line
+        )
+        if preview.exists {
+            XCTAssertFalse(
+                audioRoute.frame.intersects(preview.frame),
+                "音频设备入口不得遮挡预览入口",
+                file: file,
+                line: line
+            )
+        }
+        XCTAssertTrue(
+            screen.frame.insetBy(dx: -1, dy: -1).contains(audioRoute.frame),
+            "音频设备入口必须保持在屏幕安全布局范围内",
+            file: file,
+            line: line
+        )
+    }
+
+    @MainActor
     private func waitForCaptureState(
         _ app: XCUIApplication,
         containing text: String,
@@ -1298,6 +1668,31 @@ final class TakeFlowUITests: XCTestCase {
     }
 
     @MainActor
+    private func waitForCaptureTeleprompterToResumeOrFinish(
+        _ button: XCUIElement,
+        timeout: TimeInterval
+    ) {
+        let predicate = NSPredicate { _, _ in
+            let label = button.label
+            return label == "暂停" || label == "开始"
+        }
+        let resumedExpectation = XCTNSPredicateExpectation(
+            predicate: predicate,
+            object: button
+        )
+        let result = XCTWaiter.wait(
+            for: [resumedExpectation],
+            timeout: timeout
+        )
+        XCTAssertEqual(
+            result,
+            .completed,
+            "拖动后点击继续应进入运行状态；若 XCUITest 等待运行界面空闲期间稿件已滚动至结尾，则允许进入完成状态"
+        )
+        XCTAssertNotEqual(button.label, "继续")
+    }
+
+    @MainActor
     private func waitForTeleprompterState(
         _ app: XCUIApplication,
         containing text: String,
@@ -1320,5 +1715,35 @@ final class TakeFlowUITests: XCTestCase {
             .completed,
             "提词器状态未在 \(timeout) 秒内包含“\(text)”"
         )
+    }
+
+    @MainActor
+    private var maximumAccessibilityTextArguments: [String] {
+        [
+            "-UIPreferredContentSizeCategoryName",
+            "UICTContentSizeCategoryAccessibilityXXXL"
+        ]
+    }
+
+    @MainActor
+    private func assertExistsAndHittable(
+        _ elements: [XCUIElement],
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        for element in elements {
+            XCTAssertTrue(
+                element.waitForExistence(timeout: 5),
+                "元素不存在：\(element)",
+                file: file,
+                line: line
+            )
+            XCTAssertTrue(
+                element.isHittable,
+                "元素不可点击：\(element)",
+                file: file,
+                line: line
+            )
+        }
     }
 }

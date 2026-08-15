@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ScriptEditorView: View {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @StateObject private var viewModel: ScriptEditorViewModel
 
     init(scriptID: UUID, service: any ScriptLibraryServicing) {
@@ -89,25 +90,16 @@ struct ScriptEditorView: View {
                         .fill(Color(uiColor: .secondarySystemBackground))
                 )
 
-                HStack(spacing: 12) {
-                    Label(
-                        ScriptEditorStrings.characterCount(
-                            viewModel.characterCount
-                        ),
-                        systemImage: "character.cursor.ibeam"
-                    )
-                    Label(
-                        ScriptEditorStrings.estimatedDuration(
-                            ScriptDurationFormatter.string(
-                                from: viewModel.estimatedDuration
-                            )
-                        ),
-                        systemImage: "clock"
-                    )
-                    Spacer()
-                    Text(viewModel.saveStateText)
-                        .foregroundStyle(saveStateColor)
-                        .accessibilityIdentifier("editor.saveStatus")
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) {
+                        editorMetrics
+                        Spacer()
+                        saveStatus
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        editorMetrics
+                        saveStatus
+                    }
                 }
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -118,7 +110,7 @@ struct ScriptEditorView: View {
                     Text(ScriptEditorStrings.settings)
                         .font(.headline)
 
-                    HStack {
+                    ViewThatFits(in: .horizontal) {
                         HStack {
                             Text(ScriptEditorStrings.speechRate)
                             Spacer()
@@ -128,50 +120,32 @@ struct ScriptEditorView: View {
                                 )
                             )
                             .foregroundStyle(.secondary)
+                            speechRateButtons
                         }
-                        Button {
-                            viewModel.setSpeechRate(
-                                viewModel.speechRateCharactersPerMinute - 10
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(ScriptEditorStrings.speechRate)
+                            Text(
+                                ScriptEditorStrings.speechRate(
+                                    Int(viewModel.speechRateCharactersPerMinute)
+                                )
                             )
-                        } label: {
-                            Image(systemName: "minus.circle")
+                            .foregroundStyle(.secondary)
+                            speechRateButtons
                         }
-                        .disabled(
-                            viewModel.speechRateCharactersPerMinute
-                                <= ScriptMetrics.minimumSpeechRate
-                        )
-                        .accessibilityLabel(
-                            ScriptEditorStrings.decreaseSpeechRate
-                        )
-
-                        Button {
-                            viewModel.setSpeechRate(
-                                viewModel.speechRateCharactersPerMinute + 10
-                            )
-                        } label: {
-                            Image(systemName: "plus.circle")
-                        }
-                        .disabled(
-                            viewModel.speechRateCharactersPerMinute
-                                >= ScriptMetrics.maximumSpeechRate
-                        )
-                        .accessibilityLabel(
-                            ScriptEditorStrings.increaseSpeechRate
-                        )
                     }
                     .accessibilityIdentifier("editor.speechRate")
 
                     VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text(ScriptEditorStrings.readPosition)
-                            Spacer()
-                            Text(
-                                ScriptEditorStrings.readPosition(
-                                    viewModel.lastReadPosition,
-                                    total: viewModel.content.count
-                                )
-                            )
-                            .foregroundStyle(.secondary)
+                        ViewThatFits(in: .horizontal) {
+                            HStack {
+                                Text(ScriptEditorStrings.readPosition)
+                                Spacer()
+                                readPositionText
+                            }
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(ScriptEditorStrings.readPosition)
+                                readPositionText
+                            }
                         }
 
                         ProgressView(
@@ -180,35 +154,16 @@ struct ScriptEditorView: View {
                         )
                         .accessibilityIdentifier("editor.readPosition")
 
-                        HStack {
-                            Button {
-                                viewModel.setLastReadPosition(
-                                    viewModel.lastReadPosition - 10
-                                )
-                            } label: {
-                                Label(
-                                    ScriptEditorStrings.moveReadPositionBackward,
-                                    systemImage: "gobackward.10"
-                                )
+                        ViewThatFits(in: .horizontal) {
+                            HStack {
+                                readPositionBackwardButton
+                                Spacer()
+                                readPositionForwardButton
                             }
-                            .disabled(viewModel.lastReadPosition == 0)
-
-                            Spacer()
-
-                            Button {
-                                viewModel.setLastReadPosition(
-                                    viewModel.lastReadPosition + 10
-                                )
-                            } label: {
-                                Label(
-                                    ScriptEditorStrings.moveReadPositionForward,
-                                    systemImage: "goforward.10"
-                                )
+                            VStack(alignment: .leading, spacing: 8) {
+                                readPositionBackwardButton
+                                readPositionForwardButton
                             }
-                            .disabled(
-                                viewModel.lastReadPosition
-                                    >= viewModel.content.count
-                            )
                         }
                         .font(.footnote)
                     }
@@ -223,6 +178,8 @@ struct ScriptEditorView: View {
             .frame(maxWidth: 900)
             .frame(maxWidth: .infinity)
         }
+        .scrollIndicators(.visible)
+        .accessibilityIdentifier("editor.scrollView")
         .alert(
             ScriptEditorStrings.recoveryTitle,
             isPresented: recoveryBinding
@@ -241,6 +198,110 @@ struct ScriptEditorView: View {
         } message: {
             Text(ScriptEditorStrings.recoveryMessage)
         }
+    }
+
+    private var editorMetrics: some View {
+        Group {
+            Label(
+                ScriptEditorStrings.characterCount(
+                    viewModel.characterCount
+                ),
+                systemImage: "character.cursor.ibeam"
+            )
+            Label(
+                ScriptEditorStrings.estimatedDuration(
+                    ScriptDurationFormatter.string(
+                        from: viewModel.estimatedDuration
+                    )
+                ),
+                systemImage: "clock"
+            )
+        }
+    }
+
+    private var saveStatus: some View {
+        Text(viewModel.saveStateText)
+            .foregroundStyle(saveStateColor)
+            .accessibilityIdentifier("editor.saveStatus")
+    }
+
+    private var speechRateButtons: some View {
+        HStack(spacing: dynamicTypeSize.isAccessibilitySize ? 16 : 8) {
+            Button {
+                viewModel.setSpeechRate(
+                    viewModel.speechRateCharactersPerMinute - 10
+                )
+            } label: {
+                Image(systemName: "minus.circle")
+                    .frame(minWidth: 44, minHeight: 44)
+            }
+            .disabled(
+                viewModel.speechRateCharactersPerMinute
+                    <= ScriptMetrics.minimumSpeechRate
+            )
+            .accessibilityLabel(
+                ScriptEditorStrings.decreaseSpeechRate
+            )
+
+            Button {
+                viewModel.setSpeechRate(
+                    viewModel.speechRateCharactersPerMinute + 10
+                )
+            } label: {
+                Image(systemName: "plus.circle")
+                    .frame(minWidth: 44, minHeight: 44)
+            }
+            .disabled(
+                viewModel.speechRateCharactersPerMinute
+                    >= ScriptMetrics.maximumSpeechRate
+            )
+            .accessibilityLabel(
+                ScriptEditorStrings.increaseSpeechRate
+            )
+        }
+    }
+
+    private var readPositionText: some View {
+        Text(
+            ScriptEditorStrings.readPosition(
+                viewModel.lastReadPosition,
+                total: viewModel.content.count
+            )
+        )
+        .foregroundStyle(.secondary)
+    }
+
+    private var readPositionBackwardButton: some View {
+        Button {
+            viewModel.setLastReadPosition(
+                viewModel.lastReadPosition - 10
+            )
+        } label: {
+            Label(
+                ScriptEditorStrings.moveReadPositionBackward,
+                systemImage: "gobackward.10"
+            )
+            .frame(minHeight: 44)
+        }
+        .disabled(viewModel.lastReadPosition == 0)
+    }
+
+    private var readPositionForwardButton: some View {
+        Button {
+            viewModel.setLastReadPosition(
+                viewModel.lastReadPosition + 10
+            )
+        } label: {
+            Label(
+                ScriptEditorStrings.moveReadPositionForward,
+                systemImage: "goforward.10"
+            )
+            .frame(minHeight: 44)
+        }
+        .disabled(
+            viewModel.lastReadPosition
+                >= viewModel.content.count
+        )
     }
 
     private var saveStateColor: Color {

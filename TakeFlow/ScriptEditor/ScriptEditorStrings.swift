@@ -13,6 +13,9 @@ enum ScriptEditorStrings {
     static let delete = "删除"
     static let deleteTitle = "删除这份稿件？"
     static let deleteMessage = "稿件会先进入短暂的可撤销状态。"
+    static let deleteAccessibilityHint = "打开删除确认，不会立即删除稿件"
+    static let cancelDeletion = "取消删除稿件"
+    static let confirmDeletion = "确认删除稿件"
     static let cancel = "取消"
     static let undo = "撤销"
     static let deleted = "稿件已删除"
@@ -38,6 +41,10 @@ enum ScriptEditorStrings {
         "恢复草稿比已保存版本更新。请选择要继续使用的版本。"
     static let recoverDraft = "恢复草稿"
     static let keepSavedVersion = "保留已保存版本"
+
+    static func deleteTarget(_ title: String) -> String {
+        "将要删除：\(title)"
+    }
 
     static func duplicateTitle(for title: String) -> String {
         let visibleTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
