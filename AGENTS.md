@@ -95,6 +95,18 @@
 - `PrivacyInfo.xcprivacy`、Info.plist 权限文案、App Store 隐私披露和实际网络/数据行为必须一致。
 - 敏感本地内容使用合适的数据保护等级；设备锁定、备份排除、共享和清理策略在相关模块实现时必须记录并测试。
 
+### 语音跟随隐私与兼容性
+
+- 模块 4 首版只允许设备端语音识别。用户明确开启后，必须先创建对应 locale 的 `SFSpeechRecognizer` 并检查 `supportsOnDeviceRecognition`；不支持时不得请求 Speech 或麦克风权限。支持时才展示用途说明并依次请求 Speech、麦克风权限，授权后重新检查本地能力与 `isAvailable`。每个 `SFSpeechRecognitionRequest` 必须显式设置 `requiresOnDeviceRecognition = true`。
+- 本地识别不支持、暂不可用或失败时，禁止自动回退到联网识别；必须保留固定速度提词和正常视频录制。
+- 不得持久化识别文本、候选文本、识别时间线、匹配评分、临时锚点或专供识别的音频副本。单次任务期间可在易失内存处理这些数据并保留最多 2 秒 PCM；任务结束或取消、中断、模式切换、页面退出或代次失效时必须释放。不得写入 SwiftData、UserDefaults、文件、日志或分析事件。
+- 日志、分析、测试附件和崩溃上下文不得包含稿件正文、规范化正文、识别文本、音频、完整文件路径或完整会话标识。
+- 普通提词和摄像提词必须各有明确的单一音频采集所有者。摄像提词只能从模块 3 的同一 Capture Session 音频输入分发瞬时样本；不得创建争抢麦克风的第二个 `AVAudioEngine`、第二条麦克风采集链路或平行 Capture Session，录制中不得为识别重建 Capture Session 图。
+- 模块 4F 必须用真机证明同一 Capture Session 的 PCM 输出、视频输出与 AAC 音频录制输出安全共存，且识别失败、取消或不可用不改变录制文件。无法安全共存时只允许降级固定速度，不得采用联网识别或第二音频源。
+- 识别失败不得控制录制状态机、停止正常录像、完成/删除文件或改变 AAC 音轨。真实音频中断仍由模块 3 的 interruption episode 处理。
+- 最低生产路径使用 iOS 17 兼容的 `SFSpeechRecognizer` 抽象。`SpeechAnalyzer` 只允许作为未来经批准的适配器，不得进入 iOS 17 基础实现或无保护的生产依赖。
+- 模块 4 只能保留免费/Pro 权益和用量观察协议，不得在模块 8 决策前加入 StoreKit、额度扣减或付费墙。
+
 ## 编码规范
 
 - 使用当前稳定 Xcode 支持的 Swift 6，最低部署目标 iOS 17，同时支持 iPhone 与 iPad。

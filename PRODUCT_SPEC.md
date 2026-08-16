@@ -418,6 +418,10 @@ AVFoundation 会话必须与 SwiftUI 生命周期隔离。不得在 View 中堆�
 - 语音跟随状态机和匹配算法具有单元测试。
 - 真机测试安静、嘈杂、普通话夹英文和蓝牙麦克风场景。
 
+### 模块 4A 决策引用（2026-08-16）
+
+模块 4 的首版隐私、能力降级、音频所有权、匹配门控、量化验收和 4B–4H 阶段计划已在 `MODULE4_PRODUCT_SPEC.md` 冻结。关键决定为：仅使用设备端识别；用户明确开启后先创建 `zh-CN` recognizer 并检查 `supportsOnDeviceRecognition`，不支持时不请求 Speech 或麦克风权限；支持时才显示用途说明并依次请求权限，授权后重新检查本地能力与 `isAvailable`；每个请求必须设置 `requiresOnDeviceRecognition = true`，任何阶段都不得自动回退到联网识别。识别文本、候选、时间线、评分、临时锚点和最多 2 秒 PCM 只允许在单次任务的易失内存中处理，不得持久化到 SwiftData、UserDefaults、文件、日志或分析事件，任务结束或取消、中断、模式切换、页面退出时必须释放。最低 iOS 17 使用 `SFSpeechRecognizer` 抽象，不以 iOS 26 `SpeechAnalyzer` 为基础。确定性算法语料要求预期 `Character` 锚点 100% 正确；真机设备端识别保留独立量化阈值。摄像提词的 PCM 与视频/AAC 输出必须在同一 Capture Session 真机证明共存，不能安全共存时只降级固定速度。免费/Pro 只保留协议边界，计量和付费墙仍待模块 8 决策。
+
 ---
 
 ## 模块 5：分段录制与错句重拍
