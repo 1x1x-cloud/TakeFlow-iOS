@@ -84,6 +84,12 @@
 		C0000000000000000000007D /* RecordingElapsedTimekeeperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000007D /* RecordingElapsedTimekeeperTests.swift */; };
 		C0000000000000000000007E /* RecoverableMediaValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000007E /* RecoverableMediaValidator.swift */; };
 		C0000000000000000000007F /* RecoverableMediaValidatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000007F /* RecoverableMediaValidatorTests.swift */; };
+		C00000000000000000000080 /* SpeechTrackingModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000080 /* SpeechTrackingModels.swift */; };
+		C00000000000000000000081 /* SpeechTrackingProtocols.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000081 /* SpeechTrackingProtocols.swift */; };
+		C00000000000000000000082 /* SpeechTextNormalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000082 /* SpeechTextNormalizer.swift */; };
+		C00000000000000000000083 /* SpeechDocumentBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000083 /* SpeechDocumentBuilder.swift */; };
+		C00000000000000000000084 /* SpeechTrackingDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000084 /* SpeechTrackingDocumentTests.swift */; };
+		C00000000000000000000085 /* SpeechTrackingConcurrencyAndPerformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000085 /* SpeechTrackingConcurrencyAndPerformanceTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -198,6 +204,12 @@
 		B0000000000000000000007D /* RecordingElapsedTimekeeperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingElapsedTimekeeperTests.swift; sourceTree = "<group>"; };
 		B0000000000000000000007E /* RecoverableMediaValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoverableMediaValidator.swift; sourceTree = "<group>"; };
 		B0000000000000000000007F /* RecoverableMediaValidatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoverableMediaValidatorTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000080 /* SpeechTrackingModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechTrackingModels.swift; sourceTree = "<group>"; };
+		B00000000000000000000081 /* SpeechTrackingProtocols.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechTrackingProtocols.swift; sourceTree = "<group>"; };
+		B00000000000000000000082 /* SpeechTextNormalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechTextNormalizer.swift; sourceTree = "<group>"; };
+		B00000000000000000000083 /* SpeechDocumentBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechDocumentBuilder.swift; sourceTree = "<group>"; };
+		B00000000000000000000084 /* SpeechTrackingDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechTrackingDocumentTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000085 /* SpeechTrackingConcurrencyAndPerformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechTrackingConcurrencyAndPerformanceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -399,6 +411,10 @@
 			isa = PBXGroup;
 			children = (
 				B00000000000000000000023 /* SpeechTracking README */,
+				B00000000000000000000080 /* SpeechTrackingModels.swift */,
+				B00000000000000000000081 /* SpeechTrackingProtocols.swift */,
+				B00000000000000000000082 /* SpeechTextNormalizer.swift */,
+				B00000000000000000000083 /* SpeechDocumentBuilder.swift */,
 			);
 			path = SpeechTracking;
 			sourceTree = "<group>";
@@ -468,6 +484,8 @@
 				B0000000000000000000007B /* LocalRecordingPlayerControllerTests.swift */,
 				B0000000000000000000007D /* RecordingElapsedTimekeeperTests.swift */,
 				B0000000000000000000007F /* RecoverableMediaValidatorTests.swift */,
+				B00000000000000000000084 /* SpeechTrackingDocumentTests.swift */,
+				B00000000000000000000085 /* SpeechTrackingConcurrencyAndPerformanceTests.swift */,
 			);
 			path = TakeFlowTests;
 			sourceTree = "<group>";
@@ -684,6 +702,10 @@
 				C0000000000000000000007A /* LocalRecordingPreviewView.swift in Sources */,
 				C0000000000000000000007C /* RecordingElapsedTimekeeper.swift in Sources */,
 				C0000000000000000000007E /* RecoverableMediaValidator.swift in Sources */,
+				C00000000000000000000080 /* SpeechTrackingModels.swift in Sources */,
+				C00000000000000000000081 /* SpeechTrackingProtocols.swift in Sources */,
+				C00000000000000000000082 /* SpeechTextNormalizer.swift in Sources */,
+				C00000000000000000000083 /* SpeechDocumentBuilder.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -713,6 +735,8 @@
 				C0000000000000000000007B /* LocalRecordingPlayerControllerTests.swift in Sources */,
 				C0000000000000000000007D /* RecordingElapsedTimekeeperTests.swift in Sources */,
 				C0000000000000000000007F /* RecoverableMediaValidatorTests.swift in Sources */,
+				C00000000000000000000084 /* SpeechTrackingDocumentTests.swift in Sources */,
+				C00000000000000000000085 /* SpeechTrackingConcurrencyAndPerformanceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
